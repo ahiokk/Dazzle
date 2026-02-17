@@ -8,6 +8,9 @@
 #ifnexist "assets\dazzle.ico"
   #error "Иконка не найдена: assets\\dazzle.ico"
 #endif
+#ifnexist "assets\default_settings.json"
+  #error "Пресет настроек не найден: assets\\default_settings.json"
+#endif
 
 [Setup]
 AppId={{AEB04E34-D4E2-47B4-9D9C-8F889434E89F}
@@ -36,6 +39,7 @@ Name: "startup"; Description: "Запускать вместе с Windows"; Grou
 
 [Files]
 Source: "dist\Dazzle\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "assets\default_settings.json"; DestDir: "{userappdata}\Dazzle"; DestName: "settings.json"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\Dazzle"; Filename: "{app}\Dazzle.exe"; WorkingDir: "{app}"

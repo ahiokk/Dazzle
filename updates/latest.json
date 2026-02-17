@@ -1,6 +1,6 @@
 {
   "version": "1.0.2",
   "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.2/Dazzle-Setup-1.0.2.exe",
-  "sha256": "7c68e718d2044e6f00583fc2eb8674cb7ba459235dc0a50e2672dc2de50cded6",
-  "notes": "Базовый релиз Dazzle с поддержкой автообновлений."
+  "sha256": "fb2ca0fbd9204db145431500d4e621716da3ff1fccf26de465676b6874db0784",
+  "notes": "Установщик с преднастроенными параметрами автообновления."
 }
