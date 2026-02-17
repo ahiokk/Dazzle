@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.build_venv/
+.build_venv_py313/
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+installer_output/
+
+# Local settings/secrets
+.ENV
+*.env
+
+# Temp/test files
+tmp_shop_for_test.db
+*.bak
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
