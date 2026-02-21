@@ -17,6 +17,7 @@ class AppSettings:
     user_id: int = 1
     shop_id: int = 0
     payment_type: int = 1
+    payment_mapping_version: int = 2
     create_missing_goods: bool = True
     update_existing_goods_fields: bool = False
     update_goods_buy_price: bool = True
@@ -51,6 +52,16 @@ def load_app_settings() -> AppSettings:
         return AppSettings()
 
     defaults = AppSettings()
+    mapping_version_raw = raw.get("payment_mapping_version")
+    if mapping_version_raw is None:
+        mapping_version = 1
+    else:
+        mapping_version = _to_int(mapping_version_raw, defaults.payment_mapping_version)
+    payment_type = _to_int(raw.get("payment_type"), defaults.payment_type)
+    if mapping_version < defaults.payment_mapping_version:
+        payment_type = _migrate_payment_type_from_legacy(payment_type)
+    mapping_version = defaults.payment_mapping_version
+
     return AppSettings(
         db_path=str(raw.get("db_path", defaults.db_path) or ""),
         invoices_dir=str(raw.get("invoices_dir", defaults.invoices_dir) or ""),
@@ -66,7 +77,8 @@ def load_app_settings() -> AppSettings:
         supplier_id=_to_int(raw.get("supplier_id"), defaults.supplier_id),
         user_id=_to_int(raw.get("user_id"), defaults.user_id),
         shop_id=_to_int(raw.get("shop_id"), defaults.shop_id),
-        payment_type=_to_int(raw.get("payment_type"), defaults.payment_type),
+        payment_type=payment_type,
+        payment_mapping_version=mapping_version,
         create_missing_goods=_to_bool(raw.get("create_missing_goods"), defaults.create_missing_goods),
         update_existing_goods_fields=_to_bool(
             raw.get("update_existing_goods_fields"),
@@ -153,3 +165,14 @@ def _to_nonempty_str(value: object, default: str) -> str:
     if text:
         return text
     return str(default or "")
+
+
+def _migrate_payment_type_from_legacy(value: int) -> int:
+    # Legacy mapping used in older builds:
+    #   cash=1, wire=0. New mapping is aligned with Tirika IDs:
+    #   cash=0, wire=1.
+    if value == 0:
+        return 1
+    if value == 1:
+        return 0
+    return value

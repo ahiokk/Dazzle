@@ -7,8 +7,8 @@ from pathlib import Path
 import re
 import traceback
 
-from PySide6.QtCore import QByteArray, QTimer, Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtCore import QByteArray, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QMenu,
@@ -50,7 +52,7 @@ from .db import (
     normalize_text_field,
 )
 from .matcher import GoodsMatcher
-from .models import ImportOptions, InvoiceLine, MatchCandidate, ParsedInvoice
+from .models import ImportOptions, ImportResult, InvoiceLine, MatchCandidate, ParsedInvoice
 from .parsers import InvoiceParseError, parse_invoice_file
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
@@ -66,14 +68,15 @@ COL_SUM = 5
 COL_SELL_PRICE = 6
 COL_SELL_PRICE_OLD = 7
 COL_SELL_DIFF = 8
-COL_STATUS = 9
-COL_ACTION = 10
-COL_GOOD_ID = 11
-COL_GOOD_CODE = 12
-COL_GOOD_NAME = 13
-COL_SIMILAR = 14
-COL_METHOD = 15
-COL_WARNING = 16
+COL_MARKUP = 9
+COL_STATUS = 10
+COL_ACTION = 11
+COL_GOOD_ID = 12
+COL_GOOD_CODE = 13
+COL_GOOD_NAME = 14
+COL_SIMILAR = 15
+COL_METHOD = 16
+COL_WARNING = 17
 
 DB_ONLY_COLUMNS = (
     COL_GOOD_ID,
@@ -82,6 +85,13 @@ DB_ONLY_COLUMNS = (
 )
 
 MAX_HISTORY_STATES = 80
+
+PAYMENT_OPTIONS: tuple[tuple[str, int], ...] = (
+    ("Наличные", 0),
+    ("Безнал", 1),
+    ("Карта", 5),
+    ("QR", 7),
+)
 
 
 APP_STYLESHEET = """
@@ -253,6 +263,71 @@ QToolButton#debugToggleBtn:checked {
     border: 1px solid #1f56cd;
     color: #ffffff;
 }
+QFrame#resultHeader {
+    background: #f8fbff;
+    border: 1px solid #d5e3f7;
+    border-radius: 10px;
+}
+QLabel#resultStateOk {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
+QLabel#resultStateDry {
+    background: #dbeafe;
+    color: #1d4ed8;
+    border: 1px solid #93c5fd;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
+QFrame#metricCard {
+    background: #ffffff;
+    border: 1px solid #d8e3f1;
+    border-radius: 10px;
+}
+QLabel#metricTitle {
+    color: #64748b;
+    font-size: 9pt;
+}
+QLabel#metricValue {
+    color: #0f172a;
+    font-size: 14pt;
+    font-weight: 700;
+}
+QListWidget#warningsList {
+    background: #ffffff;
+    border: 1px solid #c7d3e3;
+    border-radius: 8px;
+    padding: 4px;
+}
+QLabel#resultTagImport {
+    background: #dcfce7;
+    color: #14532d;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
+QLabel#resultTagSkip {
+    background: #eef2f7;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
+QLabel#resultTagCreate {
+    background: #e0ecff;
+    color: #1e3a8a;
+    border: 1px solid #9ab8ea;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
 """
 
 
@@ -374,7 +449,7 @@ class ImportConfirmDialog(QDialog):
         root.setSpacing(10)
 
         title = QLabel(
-            "Есть строки с неоднозначным сопоставлением или созданием новых товаров. Проверьте перед записью:",
+            "Есть строки с неоднозначным/похожим сопоставлением или созданием новых товаров. Проверьте перед записью:",
             self,
         )
         title.setWordWrap(True)
@@ -382,10 +457,11 @@ class ImportConfirmDialog(QDialog):
         root.addWidget(title)
 
         ambiguous = sum(1 for x in lines if x.match_status == "ambiguous")
+        hints = sum(1 for x in lines if x.match_status == "hint")
         not_found = sum(1 for x in lines if x.match_status == "not_found")
         to_create = sum(1 for x in lines if x.action == "create")
         info = QLabel(
-            f"Строк для внимания: {len(lines)} | Неоднозначные: {ambiguous} | Не найдено: {not_found} | К созданию: {to_create}",
+            f"Строк для внимания: {len(lines)} | Неоднозначные: {ambiguous} | Похожие (1 вариант): {hints} | Не найдено: {not_found} | К созданию: {to_create}",
             self,
         )
         info.setObjectName("subtitleLabel")
@@ -449,7 +525,275 @@ class ImportConfirmDialog(QDialog):
         root.addWidget(buttons)
 
 
+class ImportResultDialog(QDialog):
+    def __init__(
+        self,
+        result: ImportResult,
+        *,
+        dry_run: bool,
+        debug_mode: bool,
+        supplier_name: str,
+        payment_name: str,
+        invoice_lines: list[InvoiceLine] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Проверка завершена" if dry_run else "Импорт выполнен")
+        self.resize(860, 620)
+        self.setStyleSheet(APP_STYLESHEET)
+
+        processed = result.imported_lines + result.skipped_lines
+        doc_value = f"№ {result.waybill_id}" if result.waybill_id is not None else "—"
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(10)
+
+        header = QFrame(self)
+        header.setObjectName("resultHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(10)
+
+        title_wrap = QVBoxLayout()
+        title_wrap.setSpacing(2)
+        title = QLabel("Проверка завершена" if dry_run else "Импорт выполнен успешно", self)
+        title.setObjectName("titleLabel")
+        title_wrap.addWidget(title)
+
+        subtitle = QLabel(
+            "Изменения в базу не записывались (режим проверки)." if dry_run else "Документ записан в базу Tirika.",
+            self,
+        )
+        subtitle.setObjectName("subtitleLabel")
+        subtitle.setWordWrap(True)
+        title_wrap.addWidget(subtitle)
+        header_layout.addLayout(title_wrap, 1)
+
+        state_label = QLabel("DRY-RUN" if dry_run else "УСПЕШНО", self)
+        state_label.setObjectName("resultStateDry" if dry_run else "resultStateOk")
+        header_layout.addWidget(state_label, 0, Qt.AlignRight | Qt.AlignVCenter)
+        root.addWidget(header)
+
+        tags_layout = QHBoxLayout()
+        tags_layout.setSpacing(8)
+        tags_layout.addWidget(self._result_tag("ИМПОРТ", result.imported_lines, "import"))
+        tags_layout.addWidget(self._result_tag("SKIP", result.skipped_lines, "skip"))
+        tags_layout.addWidget(self._result_tag("СОЗДАНО", result.created_goods, "create"))
+        tags_layout.addStretch(1)
+        root.addLayout(tags_layout)
+
+        tags_hint = QLabel(
+            "Формат списка ниже: [СТАТУС] АРТИКУЛ — ПРИЧИНА",
+            self,
+        )
+        tags_hint.setObjectName("subtitleLabel")
+        tags_hint.setWordWrap(True)
+        root.addWidget(tags_hint)
+
+        metrics_group = QGroupBox("Итоги", self)
+        metrics_layout = QGridLayout(metrics_group)
+        metrics_layout.setHorizontalSpacing(10)
+        metrics_layout.setVerticalSpacing(10)
+
+        metrics = [
+            ("Обработано строк", str(processed)),
+            ("Импортировано (в БД)", str(result.imported_lines)),
+            ("SKIP (без записи)", str(result.skipped_lines)),
+            ("Создано карточек", str(result.created_goods)),
+            ("Сумма накладной", _fmt_number(result.total_cost, 2)),
+            ("Документ в базе", doc_value),
+            ("Поставщик", supplier_name.strip() or "—"),
+            ("Оплата", payment_name.strip() or "—"),
+        ]
+        for idx, (label, value) in enumerate(metrics):
+            row = idx // 4
+            col = idx % 4
+            metrics_layout.addWidget(self._metric_card(label, value), row, col)
+        root.addWidget(metrics_group)
+
+        warnings_group = QGroupBox("Предупреждения", self)
+        warnings_layout = QVBoxLayout(warnings_group)
+        warnings_layout.setContentsMargins(10, 10, 10, 10)
+        warnings_layout.setSpacing(8)
+        line_by_no = {
+            int(line.line_no): line
+            for line in (invoice_lines or [])
+            if int(line.line_no) > 0
+        }
+        if result.warnings:
+            warnings_hint = QLabel(f"Найдено предупреждений: {len(result.warnings)}", self)
+            warnings_hint.setObjectName("subtitleLabel")
+            warnings_layout.addWidget(warnings_hint)
+            legend = QLabel(
+                "<span style='color:#dc2626;'>●</span> критично &nbsp;&nbsp; "
+                "<span style='color:#b29829;'>●</span> проверить вручную",
+                self,
+            )
+            legend.setObjectName("subtitleLabel")
+            warnings_layout.addWidget(legend)
+            warnings_list = QListWidget(self)
+            warnings_list.setObjectName("warningsList")
+            for warning in result.warnings:
+                display_text, severity = self._format_warning_display(warning, line_by_no)
+                item = QListWidgetItem(display_text)
+                if severity == "error":
+                    item.setIcon(self._warning_icon(QColor(220, 38, 38)))
+                    item.setForeground(QColor(153, 27, 27))
+                else:
+                    item.setIcon(self._warning_icon(QColor(178, 152, 41)))
+                    item.setForeground(QColor(122, 104, 27))
+                warnings_list.addItem(item)
+            warnings_layout.addWidget(warnings_list, 1)
+        else:
+            no_warn = QLabel("Предупреждений нет.", self)
+            no_warn.setObjectName("subtitleLabel")
+            warnings_layout.addWidget(no_warn)
+        root.addWidget(warnings_group, 1)
+
+        if result.backup_path:
+            backup_label = QLabel(f"Backup базы: {result.backup_path}", self)
+            backup_label.setObjectName("subtitleLabel")
+            backup_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            backup_label.setWordWrap(True)
+            root.addWidget(backup_label)
+
+        if debug_mode:
+            debug_group = QGroupBox("Технические детали (LOG)", self)
+            debug_layout = QVBoxLayout(debug_group)
+            debug_layout.setContentsMargins(10, 10, 10, 10)
+            details = QPlainTextEdit(self)
+            details.setReadOnly(True)
+            details.setMaximumBlockCount(500)
+            details_lines = [
+                f"dry-run: {result.dry_run}",
+                f"imported_lines: {result.imported_lines}",
+                f"skipped_lines: {result.skipped_lines}",
+                f"created_goods: {result.created_goods}",
+                f"total_cost: {result.total_cost:.2f}",
+            ]
+            if result.waybill_id is not None:
+                details_lines.append(f"waybill_id: {result.waybill_id}")
+            if result.backup_path:
+                details_lines.append(f"backup: {result.backup_path}")
+            if result.warnings:
+                details_lines.append("warnings:")
+                details_lines.extend([f"- {w}" for w in result.warnings])
+            details.setPlainText("\n".join(details_lines))
+            debug_layout.addWidget(details)
+            root.addWidget(debug_group)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok, parent=self)
+        ok_btn = buttons.button(QDialogButtonBox.Ok)
+        if ok_btn is not None:
+            ok_btn.setText("Закрыть")
+            ok_btn.setObjectName("primaryBtn")
+        buttons.accepted.connect(self.accept)
+        root.addWidget(buttons)
+
+    def _metric_card(self, title: str, value: str) -> QWidget:
+        card = QFrame(self)
+        card.setObjectName("metricCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
+
+        title_label = QLabel(title, self)
+        title_label.setObjectName("metricTitle")
+        layout.addWidget(title_label)
+
+        value_label = QLabel(value, self)
+        value_label.setObjectName("metricValue")
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(value_label)
+        return card
+
+    def _format_warning_display(
+        self,
+        warning: str,
+        line_by_no: dict[int, InvoiceLine],
+    ) -> tuple[str, str]:
+        raw = (warning or "").strip()
+        line_no = self._extract_warning_line_no(raw)
+        reason = re.sub(r"^\s*строка\s+\d+\s*:\s*", "", raw, flags=re.IGNORECASE).strip() or raw
+
+        line = line_by_no.get(line_no or -1)
+        article = line.article.strip() if line else ""
+        status = self._warning_status_label(reason, line)
+        severity = self._warning_severity(reason)
+        if not article:
+            article = "без артикула"
+        return f"[{status}] {article} — {reason}", severity
+
+    def _warning_status_label(self, reason: str, line: InvoiceLine | None) -> str:
+        low = reason.lower()
+        if line is not None:
+            if line.action == "skip":
+                return "SKIP"
+            if line.action == "create":
+                return "СОЗДАНО"
+            if line.action == "import":
+                return "ИМПОРТ"
+        if "пропущ" in low:
+            return "SKIP"
+        if "созда" in low:
+            return "СОЗДАНО"
+        if "не найден" in low or "неоднознач" in low or "несколько" in low:
+            return "SKIP"
+        return "ВНИМАНИЕ"
+
+    def _extract_warning_line_no(self, warning: str) -> int | None:
+        m = re.search(r"строка\s+(\d+)", warning, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    def _result_tag(self, label: str, value: int, kind: str) -> QLabel:
+        tag = QLabel(f"{label}: {value}", self)
+        if kind == "import":
+            tag.setObjectName("resultTagImport")
+        elif kind == "create":
+            tag.setObjectName("resultTagCreate")
+        else:
+            tag.setObjectName("resultTagSkip")
+        return tag
+
+    def _warning_severity(self, warning: str) -> str:
+        text = (warning or "").lower()
+        if "похож" in text and "не найден" in text:
+            return "warning"
+        error_markers = (
+            "ошибка",
+            "error",
+            "не найден",
+            "неоднознач",
+            "несколько",
+            "некоррект",
+            "ambiguous",
+        )
+        for marker in error_markers:
+            if marker in text:
+                return "error"
+        return "warning"
+
+    def _warning_icon(self, color: QColor) -> QIcon:
+        pixmap = QPixmap(14, 14)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(color.darker(120), 1))
+        painter.setBrush(color)
+        painter.drawEllipse(1, 1, 12, 12)
+        painter.end()
+        return QIcon(pixmap)
+
+
 class SettingsDialog(QDialog):
+    check_updates_requested = Signal(str)
+
     def __init__(
         self,
         current: AppSettings,
@@ -459,6 +803,7 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._supplier_id = current.supplier_id
+        self._payment_type_default = current.payment_type
         self._table_header_state = current.table_header_state
         self._ignored_update_version = current.ignored_update_version
         self.setWindowTitle("Настройки Dazzle")
@@ -551,6 +896,13 @@ class SettingsDialog(QDialog):
         updates_hint.setObjectName("subtitleLabel")
         updates_hint.setWordWrap(True)
         updates_layout.addWidget(updates_hint, 2, 0, 1, 3)
+
+        self.check_updates_now_btn = QPushButton("Проверить обновления сейчас", self)
+        self.check_updates_now_btn.setObjectName("primaryBtn")
+        self.check_updates_now_btn.setToolTip(
+            "Проверяет наличие новой версии по URL latest.json из этого раздела."
+        )
+        updates_layout.addWidget(self.check_updates_now_btn, 3, 0, 1, 3)
         general_layout.addWidget(updates_group)
 
         price_group = QGroupBox("Ценообразование", self)
@@ -607,10 +959,7 @@ class SettingsDialog(QDialog):
 
         import_layout.addWidget(QLabel("Оплата:"), 1, 0)
         self.payment_combo = QComboBox(self)
-        self.payment_combo.addItem("Наличные", userData=1)
-        self.payment_combo.addItem("Безнал", userData=0)
-        self.payment_combo.addItem("Карта", userData=5)
-        self.payment_combo.addItem("QR", userData=7)
+        _fill_payment_combo(self.payment_combo)
         self.payment_combo.setToolTip("Тип оплаты, который попадет в документ закупки.")
         import_layout.addWidget(self.payment_combo, 1, 1)
 
@@ -741,6 +1090,7 @@ class SettingsDialog(QDialog):
 
         self.db_pick_btn.clicked.connect(self._pick_db_file)
         self.invoices_pick_btn.clicked.connect(self._pick_invoices_dir)
+        self.check_updates_now_btn.clicked.connect(self._request_check_updates)
         self.startup_btn.clicked.connect(self._toggle_startup)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -787,7 +1137,7 @@ class SettingsDialog(QDialog):
             supplier_id=self._supplier_id,
             user_id=self._selected_data(self.user_combo, 1),
             shop_id=self._selected_data(self.shop_combo, 0),
-            payment_type=self._selected_data(self.payment_combo, 1),
+            payment_type=self._selected_data(self.payment_combo, self._payment_type_default),
             create_missing_goods=self.create_missing_cb.isChecked(),
             update_existing_goods_fields=False,
             update_goods_buy_price=self.update_existing_buy_cb.isChecked(),
@@ -823,6 +1173,9 @@ class SettingsDialog(QDialog):
         )
         if path:
             self.invoices_dir_edit.setText(path)
+
+    def _request_check_updates(self) -> None:
+        self.check_updates_requested.emit(self.update_manifest_url_edit.text().strip())
 
     @staticmethod
     def _selected_data(combo: QComboBox, default: int) -> int:
@@ -924,11 +1277,6 @@ class MainWindow(QMainWindow):
         )
         header_layout.addWidget(self.settings_btn)
 
-        self.check_updates_btn = QPushButton("Проверить обновления", self)
-        self.check_updates_btn.setMinimumWidth(190)
-        self.check_updates_btn.setToolTip("Проверяет наличие новой версии Dazzle.")
-        header_layout.addWidget(self.check_updates_btn)
-
         self.db_open_btn = QPushButton("Переподключить БД", self)
         self.db_open_btn.setObjectName("primaryBtn")
         self.db_open_btn.setMinimumWidth(170)
@@ -970,10 +1318,7 @@ class MainWindow(QMainWindow):
 
         file_layout.addWidget(QLabel("Оплата в документе:"), 1, 0)
         self.payment_combo = QComboBox(self)
-        self.payment_combo.addItem("Наличные", userData=1)
-        self.payment_combo.addItem("Безнал", userData=0)
-        self.payment_combo.addItem("Карта", userData=5)
-        self.payment_combo.addItem("QR", userData=7)
+        _fill_payment_combo(self.payment_combo)
         self.payment_combo.setToolTip("Тип оплаты для создаваемой закупки.")
         file_layout.addWidget(self.payment_combo, 1, 1)
         file_layout.addWidget(QLabel("Поставщик:"), 2, 0)
@@ -1007,33 +1352,24 @@ class MainWindow(QMainWindow):
         self.match_btn = QPushButton("Найти товары автоматически", self)
         self.pick_btn = QPushButton("Назначить товар вручную", self)
         self.apply_suggested_price_btn = QPushButton("Применить цену +50%", self)
-        self.dry_btn = QPushButton("Проверка (dry-run)", self)
         self.import_btn = QPushButton("Импорт в базу", self)
-        self.dry_btn.setObjectName("primaryBtn")
         self.import_btn.setObjectName("successBtn")
         self.match_btn.setToolTip("Автоматически ищет товары в базе по артикулу и названию.")
         self.pick_btn.setToolTip("Ручной выбор товара для текущей строки.")
         self.apply_suggested_price_btn.setToolTip(
             "Ставит рассчитанную цену (+наценка и округление) для выделенных или красных строк."
         )
-        self.dry_btn.setToolTip("Проверка без записи в базу: показывает, что именно будет импортировано.")
         self.import_btn.setToolTip("Выполняет реальную запись накладной в базу Tirika.")
-
-        match_label = QLabel("Сопоставление:", self)
-        match_label.setObjectName("subtitleLabel")
-        price_label = QLabel("Цены:", self)
-        price_label.setObjectName("subtitleLabel")
-
-        actions.addWidget(match_label)
         actions.addWidget(self.match_btn)
         actions.addWidget(self.pick_btn)
         actions.addSpacing(8)
-        actions.addWidget(price_label)
         actions.addWidget(self.apply_suggested_price_btn)
         self.undo_btn = QPushButton("Назад", self)
         self.redo_btn = QPushButton("Вперед", self)
         self.undo_btn.setToolTip("Отменить последнее изменение в таблице.")
         self.redo_btn.setToolTip("Вернуть отмененное изменение.")
+        self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(False)
         actions.addWidget(self.undo_btn)
         actions.addWidget(self.redo_btn)
         self.invoice_totals_label = QLabel("Товаров: 0 | Сумма накладной: 0", self)
@@ -1042,7 +1378,6 @@ class MainWindow(QMainWindow):
         self.invoice_totals_label.setMinimumWidth(360)
         actions.addWidget(self.invoice_totals_label)
         actions.addStretch(1)
-        actions.addWidget(self.dry_btn)
         actions.addWidget(self.import_btn)
 
         top_layout.addWidget(file_group)
@@ -1050,7 +1385,7 @@ class MainWindow(QMainWindow):
         root.addWidget(top_card)
 
         self.table = QTableWidget(self)
-        self.table.setColumnCount(17)
+        self.table.setColumnCount(18)
         self.table.setHorizontalHeaderLabels(
             [
                 "№",
@@ -1062,6 +1397,7 @@ class MainWindow(QMainWindow):
                 "Продажа (новая)",
                 "Продажа в БД",
                 "Δ, %",
+                "Наценка, %",
                 "Статус",
                 "Действие",
                 "Good ID",
@@ -1121,7 +1457,6 @@ class MainWindow(QMainWindow):
         root.addWidget(footer_card)
 
         self.settings_btn.clicked.connect(self._open_settings_dialog)
-        self.check_updates_btn.clicked.connect(lambda: self._check_for_updates(interactive=True))
         self.db_open_btn.clicked.connect(self._open_db)
         self.debug_toggle_btn.toggled.connect(self._set_debug_log_enabled)
         self.invoice_refresh_btn.clicked.connect(self._refresh_invoice_files)
@@ -1132,7 +1467,6 @@ class MainWindow(QMainWindow):
         self.apply_suggested_price_btn.clicked.connect(self._apply_suggested_prices)
         self.undo_btn.clicked.connect(self._undo_history)
         self.redo_btn.clicked.connect(self._redo_history)
-        self.dry_btn.clicked.connect(lambda: self._run_import(dry_run=True))
         self.import_btn.clicked.connect(lambda: self._run_import(dry_run=False))
         self.table.itemChanged.connect(self._on_table_item_changed)
         self.shop_combo.currentIndexChanged.connect(self._on_shop_changed)
@@ -1228,8 +1562,17 @@ class MainWindow(QMainWindow):
             return Path(appdata) / "Dazzle" / "updates"
         return Path.home() / "Dazzle" / "updates"
 
-    def _check_for_updates(self, *, interactive: bool) -> None:
-        manifest_url = self.app_settings.update_manifest_url.strip()
+    def _check_for_updates(
+        self,
+        *,
+        interactive: bool,
+        manifest_url_override: str | None = None,
+    ) -> None:
+        manifest_url = (
+            manifest_url_override
+            if manifest_url_override is not None
+            else self.app_settings.update_manifest_url
+        ).strip()
         if not manifest_url:
             if interactive:
                 QMessageBox.information(
@@ -1375,8 +1718,13 @@ class MainWindow(QMainWindow):
         self._log("Повтор действия выполнен.")
 
     def _update_history_buttons(self) -> None:
-        can_undo = self._history_index > 0
-        can_redo = self._history_index >= 0 and self._history_index + 1 < len(self._history)
+        history_len = len(self._history)
+        if history_len <= 1:
+            can_undo = False
+            can_redo = False
+        else:
+            can_undo = self._history_index > 0
+            can_redo = self._history_index >= 0 and self._history_index + 1 < history_len
         if hasattr(self, "undo_btn"):
             self.undo_btn.setEnabled(can_undo)
         if hasattr(self, "redo_btn"):
@@ -1496,6 +1844,12 @@ class MainWindow(QMainWindow):
         previous_db_path = self.app_settings.db_path.strip()
 
         dialog = SettingsDialog(self.app_settings, users, shops, self)
+        dialog.check_updates_requested.connect(
+            lambda manifest_url: self._check_for_updates(
+                interactive=True,
+                manifest_url_override=manifest_url,
+            )
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         self.app_settings = dialog.values()
@@ -1735,7 +2089,7 @@ class MainWindow(QMainWindow):
                 supplier_id=self._selected_data(self.supplier_combo, 1),
                 user_id=self._selected_data(self.user_combo, 1),
                 shop_id=self._selected_data(self.shop_combo, 0),
-                payment_type=self._selected_data(self.payment_combo, 1),
+                payment_type=self._selected_data(self.payment_combo, self.app_settings.payment_type),
                 dry_run=dry_run,
                 create_missing_goods=self.create_missing_cb.isChecked(),
                 update_existing_goods_fields=False,
@@ -1750,13 +2104,17 @@ class MainWindow(QMainWindow):
                 prefix_new_goods_with_order=self.app_settings.prefix_new_goods_with_order,
                 waybill_date=datetime.now(),
             )
+            supplier_name = _extract_supplier_name(self.supplier_combo.currentText())
+            payment_name = self.payment_combo.currentText().strip()
             result = self.db.import_invoice(self.current_invoice, options)
             detailed_lines = [
                 f"dry-run: {result.dry_run}",
                 f"импортировано строк: {result.imported_lines}",
-                f"пропущено строк: {result.skipped_lines}",
+                f"skip строк: {result.skipped_lines}",
                 f"создано товаров: {result.created_goods}",
                 f"сумма документа: {result.total_cost:.2f}",
+                f"поставщик: {supplier_name}",
+                f"оплата: {payment_name}",
             ]
             if result.waybill_id is not None:
                 detailed_lines.append(f"waybill_id: {result.waybill_id}")
@@ -1770,9 +2128,11 @@ class MainWindow(QMainWindow):
             simple_lines = [
                 f"Успешно обработано строк: {result.imported_lines + result.skipped_lines}",
                 f"Импортировано: {result.imported_lines}",
-                f"Пропущено: {result.skipped_lines}",
+                f"SKIP: {result.skipped_lines}",
                 f"Новых товаров: {result.created_goods}",
                 f"Сумма накладной: {_fmt_number(result.total_cost, 2)}",
+                f"Поставщик: {supplier_name}",
+                f"Оплата: {payment_name}",
             ]
             if result.waybill_id is not None:
                 simple_lines.append(f"Документ в базе: № {result.waybill_id}")
@@ -1787,18 +2147,16 @@ class MainWindow(QMainWindow):
             else:
                 self._log(" | ".join(simple_lines[:6]))
 
-            if dry_run:
-                if self.debug_log_enabled:
-                    message = "\n".join(detailed_lines)
-                else:
-                    message = "Проверка завершена без записи в базу.\n\n" + "\n".join(simple_lines)
-                QMessageBox.information(self, "Проверка завершена", message)
-            else:
-                if self.debug_log_enabled:
-                    message = "\n".join(detailed_lines)
-                else:
-                    message = "Импорт выполнен успешно.\n\n" + "\n".join(simple_lines)
-                QMessageBox.information(self, "Импорт выполнен", message)
+            result_dialog = ImportResultDialog(
+                result,
+                dry_run=dry_run,
+                debug_mode=self.debug_log_enabled,
+                supplier_name=supplier_name,
+                payment_name=payment_name,
+                invoice_lines=self.current_invoice.lines if self.current_invoice is not None else None,
+                parent=self,
+            )
+            result_dialog.exec()
         except ImportValidationError as exc:
             self._error(str(exc), exc=exc)
         except TirikaDBError as exc:
@@ -1810,7 +2168,7 @@ class MainWindow(QMainWindow):
         out: list[InvoiceLine] = []
         for line in lines:
             if (
-                line.match_status in {"ambiguous", "not_found"}
+                line.match_status in {"ambiguous", "hint", "not_found"}
                 or line.action == "create"
                 or bool(line.warning.strip())
             ):
@@ -1828,6 +2186,7 @@ class MainWindow(QMainWindow):
                 sell_price = line.sell_price if line.sell_price is not None else line.price
                 sell_old = self._display_sell_price_in_db(line)
                 diff_pct = line.sell_price_diff_percent
+                markup_pct = self._calculate_markup_percent(buy_price=line.price, sell_price=sell_old)
                 values = [
                     str(line.line_no),
                     line.article,
@@ -1838,6 +2197,7 @@ class MainWindow(QMainWindow):
                     _fmt_number(sell_price, 2),
                     _fmt_number(sell_old, 2) if sell_old is not None else "",
                     _fmt_number(diff_pct, 1) if diff_pct is not None else "",
+                    _fmt_number(markup_pct, 1) if markup_pct is not None else "",
                     self._status_text(line.match_status),
                     "",
                     str(line.matched_good_id or ""),
@@ -1856,6 +2216,7 @@ class MainWindow(QMainWindow):
                         COL_SELL_PRICE,
                         COL_SELL_PRICE_OLD,
                         COL_SELL_DIFF,
+                        COL_MARKUP,
                         COL_SUM,
                         COL_GOOD_ID,
                     }:
@@ -1866,6 +2227,7 @@ class MainWindow(QMainWindow):
                         COL_METHOD,
                         COL_SELL_PRICE_OLD,
                         COL_SELL_DIFF,
+                        COL_MARKUP,
                         COL_SIMILAR,
                         COL_WARNING,
                     }:
@@ -1887,13 +2249,13 @@ class MainWindow(QMainWindow):
                             item.setForeground(QColor(20, 20, 20))
 
                 if line.price_alert:
-                    for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF):
+                    for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF, COL_MARKUP):
                         item = self.table.item(row, col)
                         if item is not None:
                             item.setBackground(QColor(255, 184, 184))
                             item.setForeground(QColor(92, 0, 0))
                 elif line.raw_data.get("_price_applied", False):
-                    for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF):
+                    for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF, COL_MARKUP):
                         item = self.table.item(row, col)
                         if item is not None:
                             item.setBackground(QColor(221, 236, 255))
@@ -2197,6 +2559,18 @@ class MainWindow(QMainWindow):
             return float(line.sell_price)
         return existing_sell
 
+    def _calculate_markup_percent(
+        self,
+        *,
+        buy_price: float | None,
+        sell_price: float | None,
+    ) -> float | None:
+        if buy_price is None or sell_price is None:
+            return None
+        if buy_price <= 0:
+            return None
+        return ((sell_price - buy_price) / buy_price) * 100.0
+
     def _display_warning(self, line: InvoiceLine) -> str:
         parts: list[str] = []
         if line.warning.strip():
@@ -2213,6 +2587,7 @@ class MainWindow(QMainWindow):
             "exact": "Найден",
             "manual": "Выбран вручную",
             "fuzzy": "По названию",
+            "hint": "Похожий (1 вариант)",
             "ambiguous": "Несколько совпадений",
             "not_found": "Не найден",
         }.get(status, status or "")
@@ -2222,6 +2597,8 @@ class MainWindow(QMainWindow):
             return QColor(214, 242, 214)
         if status == "fuzzy":
             return QColor(225, 238, 255)
+        if status == "hint":
+            return QColor(255, 244, 205)
         if status == "ambiguous":
             return QColor(255, 236, 186)
         if status == "not_found":
@@ -2232,12 +2609,13 @@ class MainWindow(QMainWindow):
         total = len(lines)
         exact = sum(1 for x in lines if x.match_status in {"exact", "manual"})
         fuzzy = sum(1 for x in lines if x.match_status == "fuzzy")
+        hints = sum(1 for x in lines if x.match_status == "hint")
         ambiguous = sum(1 for x in lines if x.match_status == "ambiguous")
         missing = sum(1 for x in lines if x.match_status == "not_found")
         price_alerts = sum(1 for x in lines if x.price_alert)
         return (
             f"Строк: {total} | Найдено: {exact} | По названию: {fuzzy} | "
-            f"Неоднозначно: {ambiguous} | Не найдено: {missing} | Цена-красных: {price_alerts}"
+            f"Похожие (1): {hints} | Неоднозначно: {ambiguous} | Не найдено: {missing} | Цена-красных: {price_alerts}"
         )
 
     def _build_invoice_totals(self, lines: list[InvoiceLine]) -> str:
@@ -2316,6 +2694,12 @@ def _fmt_number(value: float, digits: int) -> str:
     return out
 
 
+def _fill_payment_combo(combo: QComboBox) -> None:
+    combo.clear()
+    for label, payment_type in PAYMENT_OPTIONS:
+        combo.addItem(label, userData=payment_type)
+
+
 def _extract_supplier_name(combo_text: str) -> str:
     text = combo_text.strip()
     match = re.match(r"^(.*?)(?:\s*\[\d+\])?$", text)
@@ -2357,6 +2741,7 @@ def _status_text_ru(status: str) -> str:
         "exact": "Найден",
         "manual": "Выбран вручную",
         "fuzzy": "По названию",
+        "hint": "Похожий (1 вариант)",
         "ambiguous": "Несколько совпадений",
         "not_found": "Не найден",
     }.get(status, status or "")
@@ -2367,6 +2752,8 @@ def _status_color_for_dialog(status: str) -> QColor | None:
         return QColor(214, 242, 214)
     if status == "fuzzy":
         return QColor(225, 238, 255)
+    if status == "hint":
+        return QColor(255, 244, 205)
     if status == "ambiguous":
         return QColor(255, 236, 186)
     if status == "not_found":

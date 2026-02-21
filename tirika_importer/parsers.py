@@ -72,7 +72,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for idx, row in df.iterrows():
-        article = _clean_article(row.iloc[code_col])
+        article = _clean_article(row.iloc[code_col], source_type="mikado_html")
         name = _clean_text(row.iloc[name_col]) if name_col is not None else ""
         if not article or "итого" in article.lower():
             continue
@@ -128,7 +128,7 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for row in table.rows:
-        article = _clean_article(row[code_col]) if code_col < len(row) else ""
+        article = _clean_article(row[code_col], source_type="akvilon_excel") if code_col < len(row) else ""
         if not article:
             continue
         if not _looks_like_article(article):
@@ -310,20 +310,25 @@ def _fix_mojibake(text: str) -> str:
         return text
 
 
-def _clean_article(value: Any) -> str:
+def _clean_article(value: Any, *, source_type: str = "") -> str:
     if isinstance(value, float) and value.is_integer():
-        return _normalize_article(str(int(value)))
+        return _normalize_article(str(int(value)), source_type=source_type)
     text = _clean_text(value)
     if re.fullmatch(r"[0-9]+\.0+", text):
         text = text.split(".", 1)[0]
-    return _normalize_article(text)
+    return _normalize_article(text, source_type=source_type)
 
 
-def _normalize_article(value: str) -> str:
+def _normalize_article(value: str, *, source_type: str = "") -> str:
     text = value.strip()
     if not text:
         return ""
-    # Supplier warehouse prefixes in Mikado invoice.
+    if source_type == "mikado_html":
+        # In Mikado invoices the first segment before '-' is a warehouse code.
+        # Example: xqwe-GM-1104 -> GM-1104.
+        if "-" in text:
+            text = text.split("-", 1)[1]
+    # Legacy known Mikado prefixes.
     text = re.sub(r"^(xmil|xzk)\s*[-_ ]*", "", text, flags=re.IGNORECASE)
     text = text.replace("\t", "")
     text = re.sub(r"[\s\-]+", "", text)

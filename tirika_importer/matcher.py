@@ -135,20 +135,28 @@ class GoodsMatcher:
         if secondary_code_candidates:
             line.candidates = secondary_code_candidates
             line.similar_articles = _format_similar_articles(secondary_code_candidates)
-            line.match_status = "ambiguous"
-            line.match_method = "secondary_code_hint"
-            line.warning = "Точный основной артикул не найден. Есть похожие по кросс-кодам/штрихкоду."
-            line.matched_good_id = None
-            line.matched_name = line.name
-            line.matched_product_code = line.article
-            line.matched_buy_price = None
-            line.existing_sell_price = None
-            line.sell_price = line.price
-            line.suggested_sell_price = None
-            line.sell_price_diff_percent = None
-            line.price_alert = False
-            line.matched_tax_mode = 0
-            line.action = "skip"
+            if len(secondary_code_candidates) == 1:
+                self._apply_candidate(line, secondary_code_candidates[0], status="exact")
+                line.action = "import"
+                line.warning = "Автосопоставление по кросс-коду/штрихкоду."
+            else:
+                line.match_status = "ambiguous"
+                line.match_method = "secondary_code_hint"
+                line.warning = (
+                    "Точный основной артикул не найден. "
+                    "Есть несколько похожих по кросс-кодам/штрихкоду."
+                )
+                line.matched_good_id = None
+                line.matched_name = line.name
+                line.matched_product_code = line.article
+                line.matched_buy_price = None
+                line.existing_sell_price = None
+                line.sell_price = line.price
+                line.suggested_sell_price = None
+                line.sell_price_diff_percent = None
+                line.price_alert = False
+                line.matched_tax_mode = 0
+                line.action = "skip"
             return
 
         # 3) Фолбэк по названию.
@@ -177,14 +185,24 @@ class GoodsMatcher:
         line.warning = "Товар не найден автоматически."
 
     def search_goods(self, query: str, limit: int = 200) -> list[MatchCandidate]:
-        q = query.strip().lower()
+        q_raw = query.strip()
+        q = q_raw.lower()
         if not q:
             ids = sorted(self.catalog.keys())
             return [self._candidate_from_good(self.catalog[i], "browse", 0.0) for i in ids[:limit]]
 
+        # Keep manual search consistent with automatic matching:
+        # first try exact/article-like matches by main code and secondary codes.
+        primary_candidates = self._find_primary_by_code(q_raw)
+        secondary_candidates = self._find_secondary_by_code(q_raw)
+        merged_exact = _merge_candidates(primary_candidates, secondary_candidates, limit=limit)
+        if merged_exact:
+            return merged_exact[:limit]
+
         items: list[tuple[float, MatchCandidate]] = []
         q_norm_name = normalize_name(query)
         q_alnum = normalize_code_alnum(query)
+        prefer_code_only = _looks_like_article_query(q_raw)
         for good in self.catalog.values():
             score = 0.0
             method = "search"
@@ -197,21 +215,65 @@ class GoodsMatcher:
                 score = 0.95
                 method = "search_code_alnum"
             else:
-                name_norm = self._norm_names.get(good.good_id, "")
-                if q_norm_name and q_norm_name in name_norm:
-                    score = 0.9
-                    method = "search_name"
-                else:
-                    ratio = SequenceMatcher(None, q_norm_name, name_norm[: len(q_norm_name) * 2]).ratio()
-                    if ratio >= 0.35:
-                        score = ratio
-                        method = "search_fuzzy"
+                sec_score, sec_method = self._search_secondary_codes(good, q, q_alnum)
+                if sec_score > 0:
+                    score = sec_score
+                    method = sec_method
+                elif not prefer_code_only:
+                    name_norm = self._norm_names.get(good.good_id, "")
+                    if q_norm_name and q_norm_name in name_norm:
+                        score = 0.9
+                        method = "search_name"
+                    else:
+                        ratio = SequenceMatcher(None, q_norm_name, name_norm[: len(q_norm_name) * 2]).ratio()
+                        if ratio >= 0.35:
+                            score = ratio
+                            method = "search_fuzzy"
 
             if score > 0:
                 items.append((score, self._candidate_from_good(good, method, score)))
 
         items.sort(key=lambda x: x[0], reverse=True)
         return [cand for _, cand in items[:limit]]
+
+    def _search_secondary_codes(
+        self,
+        good: GoodRecord,
+        query: str,
+        query_alnum: str,
+    ) -> tuple[float, str]:
+        best_score = 0.0
+        best_method = ""
+
+        for cross in good.cross_codes:
+            cross_text = cross.lower()
+            cross_alnum = normalize_code_alnum(cross)
+            if query and query == cross_text:
+                return 0.94, "search_secondary_cross_exact"
+            if query_alnum and query_alnum == cross_alnum:
+                return 0.93, "search_secondary_cross_alnum_exact"
+            if query and query in cross_text and best_score < 0.90:
+                best_score = 0.90
+                best_method = "search_secondary_cross"
+            if query_alnum and query_alnum in cross_alnum and best_score < 0.88:
+                best_score = 0.88
+                best_method = "search_secondary_cross_alnum"
+
+        for barcode in good.barcodes:
+            barcode_text = barcode.lower()
+            barcode_alnum = normalize_code_alnum(barcode)
+            if query and query == barcode_text:
+                return 0.92, "search_secondary_barcode_exact"
+            if query_alnum and query_alnum == barcode_alnum:
+                return 0.91, "search_secondary_barcode_alnum_exact"
+            if query and query in barcode_text and best_score < 0.86:
+                best_score = 0.86
+                best_method = "search_secondary_barcode"
+            if query_alnum and query_alnum in barcode_alnum and best_score < 0.85:
+                best_score = 0.85
+                best_method = "search_secondary_barcode_alnum"
+
+        return best_score, best_method
 
     def apply_manual_good(self, line: InvoiceLine, good_id: int) -> None:
         good = self.catalog.get(good_id)
@@ -342,6 +404,15 @@ def normalize_name(value: str) -> str:
     value = value.lower().strip()
     value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _looks_like_article_query(value: str) -> bool:
+    text = normalize_code_alnum(value)
+    if len(text) < 4:
+        return False
+    has_digit = any(ch.isdigit() for ch in text)
+    has_alpha = any(ch.isalpha() for ch in text)
+    return has_digit and (has_alpha or len(text) >= 6)
 
 
 def _pick_best(current: MatchCandidate | None, incoming: MatchCandidate) -> MatchCandidate:
