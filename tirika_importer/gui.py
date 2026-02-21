@@ -1514,8 +1514,10 @@ class MainWindow(QMainWindow):
 
     def _apply_db_columns_visibility(self) -> None:
         show_db_columns = self.debug_log_enabled
-        for col in DB_ONLY_COLUMNS:
-            self.table.setColumnHidden(col, not show_db_columns)
+        hidden_when_off = set(DB_ONLY_COLUMNS)
+        for col in range(self.table.columnCount()):
+            should_hide = (col in hidden_when_off) and (not show_db_columns)
+            self.table.setColumnHidden(col, should_hide)
 
     def _on_payment_changed(self) -> None:
         self.app_settings.payment_type = self._selected_data(self.payment_combo, self.app_settings.payment_type)

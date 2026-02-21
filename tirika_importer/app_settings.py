@@ -29,6 +29,7 @@ class AppSettings:
     auto_pay: bool = True
     backup_before_import: bool = True
     prefix_new_goods_with_order: bool = True
+    table_layout_version: int = 2
     table_header_state: str = ""
     update_manifest_url: str = "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest.json"
     auto_check_updates: bool = True
@@ -61,6 +62,16 @@ def load_app_settings() -> AppSettings:
     if mapping_version < defaults.payment_mapping_version:
         payment_type = _migrate_payment_type_from_legacy(payment_type)
     mapping_version = defaults.payment_mapping_version
+
+    layout_version_raw = raw.get("table_layout_version")
+    if layout_version_raw is None:
+        layout_version = 1
+    else:
+        layout_version = _to_int(layout_version_raw, defaults.table_layout_version)
+    table_header_state = str(raw.get("table_header_state", defaults.table_header_state) or "")
+    if layout_version < defaults.table_layout_version:
+        table_header_state = ""
+    layout_version = defaults.table_layout_version
 
     return AppSettings(
         db_path=str(raw.get("db_path", defaults.db_path) or ""),
@@ -114,7 +125,8 @@ def load_app_settings() -> AppSettings:
             raw.get("prefix_new_goods_with_order"),
             defaults.prefix_new_goods_with_order,
         ),
-        table_header_state=str(raw.get("table_header_state", defaults.table_header_state) or ""),
+        table_layout_version=layout_version,
+        table_header_state=table_header_state,
         update_manifest_url=_to_nonempty_str(
             raw.get("update_manifest_url"),
             defaults.update_manifest_url,
