@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.3/Dazzle-Setup-1.0.3.exe",
-  "sha256": "cf8d297e02da99585db28984c101a6ee303765a78c27c1b967578c4458887f83",
-  "notes": "Исправлена логика оплаты (безнал/наличные), добавлена колонка наценки в таблице."
+  "version": "1.0.4",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.4/Dazzle-Setup-1.0.4.exe",
+  "sha256": "91e461d35f7755cc9f4b711c682bdf3cfde586d9be4ac18c195087c3dc25c11f",
+  "notes": "Добавлен столбец примечаний из накладной и улучшено отображение строк."
 }
