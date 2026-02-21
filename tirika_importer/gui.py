@@ -62,21 +62,22 @@ from .version import APP_NAME, APP_VERSION
 COL_LINE = 0
 COL_ARTICLE = 1
 COL_NAME = 2
-COL_QTY = 3
-COL_BUY_PRICE = 4
-COL_SUM = 5
-COL_SELL_PRICE = 6
-COL_SELL_PRICE_OLD = 7
-COL_SELL_DIFF = 8
-COL_MARKUP = 9
-COL_STATUS = 10
-COL_ACTION = 11
-COL_GOOD_ID = 12
-COL_GOOD_CODE = 13
-COL_GOOD_NAME = 14
-COL_SIMILAR = 15
-COL_METHOD = 16
-COL_WARNING = 17
+COL_NOTE = 3
+COL_QTY = 4
+COL_BUY_PRICE = 5
+COL_SUM = 6
+COL_SELL_PRICE = 7
+COL_SELL_PRICE_OLD = 8
+COL_SELL_DIFF = 9
+COL_MARKUP = 10
+COL_STATUS = 11
+COL_ACTION = 12
+COL_GOOD_ID = 13
+COL_GOOD_CODE = 14
+COL_GOOD_NAME = 15
+COL_SIMILAR = 16
+COL_METHOD = 17
+COL_WARNING = 18
 
 DB_ONLY_COLUMNS = (
     COL_GOOD_ID,
@@ -1385,12 +1386,13 @@ class MainWindow(QMainWindow):
         root.addWidget(top_card)
 
         self.table = QTableWidget(self)
-        self.table.setColumnCount(18)
+        self.table.setColumnCount(19)
         self.table.setHorizontalHeaderLabels(
             [
                 "№",
                 "Артикул",
                 "Название из накладной",
+                "Примечание",
                 "Кол-во",
                 "Закуп",
                 "Сумма",
@@ -2191,6 +2193,7 @@ class MainWindow(QMainWindow):
                     str(line.line_no),
                     line.article,
                     line.name,
+                    line.note,
                     _fmt_number(line.quantity, 3),
                     _fmt_number(line.price, 2),
                     _fmt_number(line.total, 2),
@@ -2261,7 +2264,7 @@ class MainWindow(QMainWindow):
                             item.setBackground(QColor(221, 236, 255))
 
                 if line.raw_data.get("_manual_edited", False):
-                    for col in (COL_ARTICLE, COL_NAME, COL_QTY, COL_BUY_PRICE, COL_SUM):
+                    for col in (COL_ARTICLE, COL_NAME, COL_NOTE, COL_QTY, COL_BUY_PRICE, COL_SUM):
                         item = self.table.item(row, col)
                         if item is not None:
                             item.setBackground(QColor(232, 243, 255))
@@ -2307,6 +2310,7 @@ class MainWindow(QMainWindow):
 
             article = normalize_article(self._item_text(row, COL_ARTICLE))
             name = normalize_text_field(self._item_text(row, COL_NAME), max_len=120)
+            note = normalize_text_field(self._item_text(row, COL_NOTE), max_len=250)
             if not article:
                 article = normalize_article(line.article)
             if not name:
@@ -2349,6 +2353,7 @@ class MainWindow(QMainWindow):
 
             line.article = article
             line.name = name
+            line.note = note
             line.quantity = qty
             line.price = buy_price
             line.sell_price = sell_price

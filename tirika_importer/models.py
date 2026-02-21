@@ -24,6 +24,7 @@ class InvoiceLine:
     line_no: int
     article: str
     name: str
+    note: str
     quantity: float
     price: float
     total: float

@@ -62,6 +62,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
     price_col = _find_col(cols, ["цена"])
     sum_col = _find_col(cols, ["сумма"])
     name_col = _find_col(cols, ["название", "наименование"])
+    note_col = _find_col(cols, ["примеч", "коммент", "note", "remark"])
 
     if code_col is None or qty_col is None or price_col is None:
         raise InvoiceParseError(
@@ -74,6 +75,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
     for idx, row in df.iterrows():
         article = _clean_article(row.iloc[code_col], source_type="mikado_html")
         name = _clean_text(row.iloc[name_col]) if name_col is not None else ""
+        note = _clean_text(row.iloc[note_col]) if note_col is not None else ""
         if not article or "итого" in article.lower():
             continue
         if not _looks_like_article(article):
@@ -87,6 +89,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
             line_no=len(lines) + 1,
             article=article,
             name=name,
+            note=note,
             quantity=qty,
             price=price,
             total=total,
@@ -120,6 +123,7 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
     sum_col = _find_col(headers, ["сумма"])
     name_col = _find_col(headers, ["описание", "наименование"])
     status_col = _find_col(headers, ["статус"])
+    note_col = _find_col(headers, ["примеч", "коммент", "note", "remark"])
 
     if code_col is None or qty_col is None or price_col is None:
         raise InvoiceParseError(
@@ -136,6 +140,8 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
 
         name = _clean_text(row[name_col]) if name_col is not None and name_col < len(row) else ""
         name = _fix_mojibake(name)
+        note = _clean_text(row[note_col]) if note_col is not None and note_col < len(row) else ""
+        note = _fix_mojibake(note)
 
         qty = _to_float(row[qty_col]) if qty_col < len(row) else 0.0
         price = _to_float(row[price_col]) if price_col < len(row) else 0.0
@@ -158,12 +164,13 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
             line_no=len(lines) + 1,
             article=article,
             name=name,
+            note=note,
             quantity=qty,
             price=price,
             total=total,
             source_supplier="АКВИЛОН",
             warning=warning,
-            raw_data={"status": status},
+            raw_data={"status": status, "note": note},
         )
         lines.append(line)
 
