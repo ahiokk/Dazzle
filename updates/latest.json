@@ -1,6 +1,6 @@
 {
-  "version": "1.0.4",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.4/Dazzle-Setup-1.0.4.exe",
-  "sha256": "91e461d35f7755cc9f4b711c682bdf3cfde586d9be4ac18c195087c3dc25c11f",
-  "notes": "Добавлен столбец примечаний из накладной и улучшено отображение строк."
+  "version": "1.0.5",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.5/Dazzle-Setup-1.0.5.exe",
+  "sha256": "c3131d4ebdfc899935ca8b44b4c20be4e980589a0ad3d4ad0b58d4ac04505070",
+  "notes": "Исправлена миграция/видимость столбцов после добавления Примечания, восстановлены корректные подсветки статусов."
 }
