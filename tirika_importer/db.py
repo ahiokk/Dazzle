@@ -11,6 +11,10 @@ from pathlib import Path
 
 from .models import ImportOptions, ImportResult, InvoiceLine, ParsedInvoice
 
+PURCHASE_WAYBILL_RECORD_TYPE = 1
+WAYBILL_OPERATION_OBJECT_TYPE = 3
+WAYBILL_OPERATION_TYPE_CREATE = 1
+
 
 class TirikaDBError(RuntimeError):
     pass
@@ -225,6 +229,10 @@ class TirikaDB:
         try:
             cur = conn.cursor()
             cur.execute("BEGIN IMMEDIATE")
+            max_waybill_before = self._max_id(cur, "waybills")
+            max_waybill_item_before = self._max_id(cur, "waybill_items")
+            max_payment_before = self._max_id(cur, "payments")
+            max_operation_before = self._max_id(cur, "operations")
 
             waybill_date = options.waybill_date or invoice.invoice_date or datetime.now()
             waybill_ts = int(waybill_date.timestamp())
@@ -286,7 +294,7 @@ class TirikaDB:
                     foreign_id, flags, repair_status, customer_balls_spent, referer_balls_spent
                 )
                 VALUES (
-                    ?, 0, 0, ?, ?, 1, ?, 0, 0, ?, ?, CAST(? AS TEXT),
+                    ?, 0, 0, ?, ?, ?, ?, 0, 0, ?, ?, CAST(? AS TEXT),
                     ?, ?, CAST(? AS TEXT), CAST(? AS TEXT), 0, 0,
                     0, 0, -1, 0, 0, -1, 0, -1, 0, 0
                 )
@@ -295,6 +303,7 @@ class TirikaDB:
                     waybill_id,
                     options.shop_id,
                     waybill_ts,
+                    PURCHASE_WAYBILL_RECORD_TYPE,
                     options.payment_type,
                     options.supplier_id,
                     options.user_id,
@@ -309,6 +318,7 @@ class TirikaDB:
             for item_id, line, good_id, tax_mode in item_rows:
                 qty = round(line.quantity, 6)
                 price = round(line.price, 2)
+                note = normalize_text_field(line.note or "", max_len=250)
                 cur.execute(
                     """
                     INSERT INTO waybill_items (
@@ -329,7 +339,7 @@ class TirikaDB:
                         qty,
                         price,
                         price,
-                        encode_db_text(""),
+                        encode_db_text(note),
                         tax_mode,
                     ),
                 )
@@ -417,16 +427,31 @@ class TirikaDB:
                     id, is_replicated, user_id, object_type, operation_type, operation_date,
                     object_id, object_description, operation_description
                 )
-                VALUES (?, 0, ?, 3, 1, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT))
+                VALUES (?, 0, ?, ?, ?, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT))
                 """,
                 (
                     operation_id,
                     options.user_id,
+                    WAYBILL_OPERATION_OBJECT_TYPE,
+                    WAYBILL_OPERATION_TYPE_CREATE,
                     waybill_ts,
                     waybill_id,
                     encode_db_text(self._build_operation_description(waybill_date, total_cost)),
                     encode_db_text(f"Импорт накладной: {invoice.file_path.name}"),
                 ),
+            )
+
+            self._assert_purchase_only_invariants(
+                cur=cur,
+                max_waybill_before=max_waybill_before,
+                max_waybill_item_before=max_waybill_item_before,
+                max_payment_before=max_payment_before,
+                max_operation_before=max_operation_before,
+                waybill_id=waybill_id,
+                expected_items=len(item_rows),
+                supplier_id=options.supplier_id,
+                user_id=options.user_id,
+                auto_pay=options.auto_pay,
             )
 
             if options.dry_run:
@@ -672,6 +697,121 @@ class TirikaDB:
     def _next_id(self, cur: sqlite3.Cursor, table: str) -> int:
         row = cur.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}").fetchone()
         return int(row[0])
+
+    def _max_id(self, cur: sqlite3.Cursor, table: str) -> int:
+        row = cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()
+        return int(row[0] or 0)
+
+    def _assert_purchase_only_invariants(
+        self,
+        *,
+        cur: sqlite3.Cursor,
+        max_waybill_before: int,
+        max_waybill_item_before: int,
+        max_payment_before: int,
+        max_operation_before: int,
+        waybill_id: int,
+        expected_items: int,
+        supplier_id: int,
+        user_id: int,
+        auto_pay: bool,
+    ) -> None:
+        waybills = cur.execute(
+            """
+            SELECT id, record_type, contractor_id, user_id
+            FROM waybills
+            WHERE id > ?
+            ORDER BY id
+            """,
+            (max_waybill_before,),
+        ).fetchall()
+        if len(waybills) != 1:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: создано неожиданное число документов waybill."
+            )
+        wb_id, wb_record_type, wb_contractor_id, wb_user_id = waybills[0]
+        if int(wb_id) != waybill_id:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: создан не тот документ waybill."
+            )
+        if int(wb_record_type or 0) != PURCHASE_WAYBILL_RECORD_TYPE:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: документ имеет недопустимый тип (не закупка)."
+            )
+        if int(wb_contractor_id or 0) != supplier_id:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: в документ записан неверный поставщик."
+            )
+        if int(wb_user_id or 0) != user_id:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: в документ записан неверный пользователь."
+            )
+
+        item_stats = cur.execute(
+            """
+            SELECT COUNT(*), MIN(waybill_id), MAX(waybill_id)
+            FROM waybill_items
+            WHERE id > ?
+            """,
+            (max_waybill_item_before,),
+        ).fetchone()
+        item_count = int(item_stats[0] or 0)
+        item_wb_min = int(item_stats[1] or 0) if item_stats[1] is not None else 0
+        item_wb_max = int(item_stats[2] or 0) if item_stats[2] is not None else 0
+        if item_count != expected_items:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: количество строк waybill_items не совпало."
+            )
+        if item_count > 0 and (item_wb_min != waybill_id or item_wb_max != waybill_id):
+            raise ImportValidationError(
+                "Контроль безопасности импорта: строки waybill_items привязаны к другому документу."
+            )
+
+        payments = cur.execute(
+            """
+            SELECT id, waybill_id
+            FROM payments
+            WHERE id > ?
+            ORDER BY id
+            """,
+            (max_payment_before,),
+        ).fetchall()
+        expected_payment_count = 1 if auto_pay else 0
+        if len(payments) != expected_payment_count:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: создано неожиданное число платежей."
+            )
+        if payments and int(payments[0][1] or 0) != waybill_id:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: платеж привязан к другому документу."
+            )
+
+        operations = cur.execute(
+            """
+            SELECT id, object_type, operation_type, object_id
+            FROM operations
+            WHERE id > ?
+            ORDER BY id
+            """,
+            (max_operation_before,),
+        ).fetchall()
+        if len(operations) != 1:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: создано неожиданное число записей operations."
+            )
+        _, op_object_type, op_type, op_object_id = operations[0]
+        if int(op_object_type or 0) != WAYBILL_OPERATION_OBJECT_TYPE:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: operation записан не в тип waybill."
+            )
+        if int(op_type or 0) != WAYBILL_OPERATION_TYPE_CREATE:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: operation_type недопустим для импорта закупки."
+            )
+        if int(op_object_id or 0) != waybill_id:
+            raise ImportValidationError(
+                "Контроль безопасности импорта: operation привязан к другому документу."
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)

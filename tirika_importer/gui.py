@@ -807,6 +807,9 @@ class SettingsDialog(QDialog):
         self._payment_type_default = current.payment_type
         self._table_header_state = current.table_header_state
         self._ignored_update_version = current.ignored_update_version
+        self._update_manifest_url = (
+            current.update_manifest_url.strip() or AppSettings().update_manifest_url
+        )
         self.setWindowTitle("Настройки Dazzle")
         self.resize(920, 640)
         self.setStyleSheet(APP_STYLESHEET)
@@ -875,35 +878,16 @@ class SettingsDialog(QDialog):
         self.auto_update_check_cb = QCheckBox("Проверять обновления при запуске", self)
         self.auto_update_check_cb.setChecked(current.auto_check_updates)
         self.auto_update_check_cb.setToolTip(
-            "Если включено, Dazzle при старте проверяет наличие новой версии по ссылке ниже."
+            "Если включено, Dazzle при старте проверяет наличие новой версии автоматически."
         )
-        updates_layout.addWidget(self.auto_update_check_cb, 0, 0, 1, 3)
-
-        updates_layout.addWidget(QLabel("URL latest.json:"), 1, 0)
-        self.update_manifest_url_edit = QLineEdit(self)
-        self.update_manifest_url_edit.setText(current.update_manifest_url)
-        self.update_manifest_url_edit.setPlaceholderText(
-            "https://raw.githubusercontent.com/<owner>/<repo>/main/updates/latest.json"
-        )
-        self.update_manifest_url_edit.setToolTip(
-            "Ссылка на JSON с описанием последнего релиза: version, url, sha256."
-        )
-        updates_layout.addWidget(self.update_manifest_url_edit, 1, 1, 1, 2)
-
-        updates_hint = QLabel(
-            "Источник обновлений можно хранить в GitHub (raw latest.json + asset установщика в Releases).",
-            self,
-        )
-        updates_hint.setObjectName("subtitleLabel")
-        updates_hint.setWordWrap(True)
-        updates_layout.addWidget(updates_hint, 2, 0, 1, 3)
+        updates_layout.addWidget(self.auto_update_check_cb, 0, 0, 1, 2)
 
         self.check_updates_now_btn = QPushButton("Проверить обновления сейчас", self)
         self.check_updates_now_btn.setObjectName("primaryBtn")
         self.check_updates_now_btn.setToolTip(
-            "Проверяет наличие новой версии по URL latest.json из этого раздела."
+            "Проверяет наличие новой версии."
         )
-        updates_layout.addWidget(self.check_updates_now_btn, 3, 0, 1, 3)
+        updates_layout.addWidget(self.check_updates_now_btn, 1, 0, 1, 2)
         general_layout.addWidget(updates_group)
 
         price_group = QGroupBox("Ценообразование", self)
@@ -1151,7 +1135,7 @@ class SettingsDialog(QDialog):
             backup_before_import=self.backup_cb.isChecked(),
             prefix_new_goods_with_order=self.prefix_order_name_cb.isChecked(),
             table_header_state=self._table_header_state,
-            update_manifest_url=self.update_manifest_url_edit.text().strip(),
+            update_manifest_url=self._update_manifest_url,
             auto_check_updates=self.auto_update_check_cb.isChecked(),
             ignored_update_version=self._ignored_update_version,
         )
@@ -1176,7 +1160,7 @@ class SettingsDialog(QDialog):
             self.invoices_dir_edit.setText(path)
 
     def _request_check_updates(self) -> None:
-        self.check_updates_requested.emit(self.update_manifest_url_edit.text().strip())
+        self.check_updates_requested.emit(self._update_manifest_url)
 
     @staticmethod
     def _selected_data(combo: QComboBox, default: int) -> int:
@@ -1583,7 +1567,7 @@ class MainWindow(QMainWindow):
                     self,
                     "Обновления",
                     "Ссылка на обновления не настроена.\n"
-                    "Укажите URL latest.json в Настройках -> Обновления.",
+                    "Обратитесь к администратору приложения.",
                 )
             return
 
