@@ -35,6 +35,14 @@ def parse_invoice_file(path: Path) -> ParsedInvoice:
     if not path.exists():
         raise InvoiceParseError(f"Файл не найден: {path}")
 
+    filename = path.name.lower().strip()
+
+    if filename.startswith("paid"):
+        return _parse_forum_paid_excel(path)
+
+    if filename.startswith("msk"):
+        return _parse_moskvorechie_excel(path)
+
     if _looks_like_html(path):
         return _parse_mikado_html(path)
 
@@ -75,6 +83,8 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for idx, row in df.iterrows():
+        if _row_has_total_marker(row.tolist()):
+            continue
         article = _clean_article(row.iloc[code_col], source_type="mikado_html")
         name = _clean_text(row.iloc[name_col]) if name_col is not None else ""
         note = _extract_note_from_row(row.tolist(), note_cols)
@@ -187,6 +197,178 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
     )
 
 
+def _parse_forum_paid_excel(path: Path) -> ParsedInvoice:
+    rows = _read_excel_matrix(path)
+    header_idx, headers = _find_header_row(
+        rows,
+        required_term_groups=[["артикул"], ["наименование"], ["цена"], ["сумма"]],
+    )
+    if header_idx is None:
+        raise InvoiceParseError(
+            "Не удалось определить колонки для ФОРУМ (артикул/наименование/цена/сумма)."
+        )
+
+    article_col = _find_col(headers, ["артикул", "код"])
+    qty_ship_col = _find_col(headers, ["отгруж"])
+    qty_booked_col = _find_col(headers, ["бронь"])
+    qty_ordered_col = _find_col(headers, ["заказано", "кол"])
+    price_col = _find_col(headers, ["цена"])
+    sum_col = _find_col(headers, ["сумма"])
+    name_col = _find_col(headers, ["наименование", "название", "описание"])
+    brand_col = _find_col(headers, ["бренд", "производитель"])
+
+    if article_col is None or price_col is None:
+        raise InvoiceParseError("Не удалось определить обязательные колонки для ФОРУМ (артикул/цена).")
+
+    order_status = _extract_order_status(rows[:header_idx])
+    invoice_number = ""
+    m_invoice = re.search(r"paid[_\s-]*(\d+)", path.stem, flags=re.IGNORECASE)
+    if m_invoice:
+        invoice_number = m_invoice.group(1)
+
+    lines: list[InvoiceLine] = []
+    for row in rows[header_idx + 1 :]:
+        first_cell = _clean_text(_row_value(row, 0)).lower()
+        if first_cell.startswith("всего"):
+            break
+
+        article = _clean_article(_row_value(row, article_col), source_type="forum_paid_excel")
+        if not article or not _looks_like_article(article):
+            continue
+
+        qty = _pick_first_positive_float(
+            row,
+            [qty_ship_col, qty_booked_col, qty_ordered_col],
+        )
+        price = _to_float(_row_value(row, price_col))
+        total = (
+            _to_float(_row_value(row, sum_col))
+            if sum_col is not None
+            else round(qty * price, 2)
+        )
+        if qty <= 0 or (price <= 0 and total <= 0):
+            continue
+
+        name = _clean_text(_row_value(row, name_col))
+        brand = _clean_text(_row_value(row, brand_col))
+        warning = ""
+        if order_status and "выдан" not in order_status.lower():
+            warning = f"Статус заказа: {order_status}"
+
+        raw_data = {"order_status": order_status, "brand": brand}
+        line = InvoiceLine(
+            line_no=len(lines) + 1,
+            article=article,
+            name=name,
+            note="",
+            quantity=qty,
+            price=price,
+            total=total,
+            source_supplier="ФОРУМ",
+            warning=warning,
+            raw_data=raw_data,
+        )
+        lines.append(line)
+
+    if not lines:
+        raise InvoiceParseError("Не найдено строк с товарами в файле ФОРУМ.")
+
+    return ParsedInvoice(
+        file_path=path,
+        supplier_hint="ФОРУМ",
+        source_type="forum_paid_excel",
+        lines=lines,
+        invoice_number=invoice_number,
+    )
+
+
+def _parse_moskvorechie_excel(path: Path) -> ParsedInvoice:
+    rows = _read_excel_matrix(path)
+    header_idx, headers = _find_header_row(
+        rows,
+        required_term_groups=[["артикул"], ["наименование"], ["цена"], ["кол"]],
+    )
+    if header_idx is None:
+        raise InvoiceParseError(
+            "Не удалось определить колонки для МОСКВОРЕЧЬЕ (артикул/наименование/цена/кол-во)."
+        )
+
+    article_col = _find_col(headers, ["артикул", "код"])
+    qty_col = _find_col(headers, ["кол-во", "кол"])
+    price_col = _find_col(headers, ["цена"])
+    sum_col = _find_col(headers, ["сумма"])
+    name_col = _find_col(headers, ["наименование", "название", "описание"])
+    status_col = _find_col(headers, ["состояние", "статус"])
+    note_cols = _find_cols(headers, NOTE_COLUMN_NEEDLES)
+    note_cols.extend(_find_cols(headers, ["спецификац", "№ документа"]))
+    note_cols = list(dict.fromkeys(note_cols))
+
+    if article_col is None or qty_col is None or price_col is None:
+        raise InvoiceParseError(
+            "Не удалось определить обязательные колонки для МОСКВОРЕЧЬЕ (артикул/кол-во/цена)."
+        )
+
+    lines: list[InvoiceLine] = []
+    for row in rows[header_idx + 1 :]:
+        article = _clean_article(_row_value(row, article_col), source_type="moskvorechie_excel")
+        if not article or not _looks_like_article(article):
+            continue
+
+        qty = _to_float(_row_value(row, qty_col))
+        price = _to_float(_row_value(row, price_col))
+        total = (
+            _to_float(_row_value(row, sum_col))
+            if sum_col is not None
+            else round(qty * price, 2)
+        )
+        # In "История заказов" rows with order metadata also have article-like values,
+        # but no meaningful qty/price. Keep only product rows.
+        if qty <= 0 or (price <= 0 and total <= 0):
+            continue
+
+        name = _clean_text(_row_value(row, name_col))
+        name = _fix_mojibake(name)
+        note = _extract_note_from_row(row, note_cols)
+        note = _fix_mojibake(note)
+        status = _clean_text(_row_value(row, status_col))
+        warning = ""
+        if status and status.lower() not in {"выполнен", "выдан", "выдано"}:
+            warning = f"Статус строки: {status}"
+
+        line = InvoiceLine(
+            line_no=len(lines) + 1,
+            article=article,
+            name=name,
+            note=note,
+            quantity=qty,
+            price=price,
+            total=total,
+            source_supplier="МОСКВОРЕЧЬЕ",
+            warning=warning,
+            raw_data={"status": status, "note": note},
+        )
+        lines.append(line)
+
+    if not lines:
+        raise InvoiceParseError("Не найдено строк с товарами в файле МОСКВОРЕЧЬЕ.")
+
+    return ParsedInvoice(
+        file_path=path,
+        supplier_hint="МОСКВОРЕЧЬЕ",
+        source_type="moskvorechie_excel",
+        lines=lines,
+    )
+
+
+def _read_excel_matrix(path: Path) -> list[list[Any]]:
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            df = pd.read_excel(path, header=None)
+        return [[v for v in row] for row in df.itertuples(index=False, name=None)]
+    except Exception:
+        return _read_excel_matrix_via_com(path)
+
+
 def _read_excel_table(path: Path) -> ParsedTable:
     try:
         # xlrd can print corruption diagnostics to stdout/stderr; silence it
@@ -246,6 +428,93 @@ def _read_excel_table_via_com(path: Path) -> ParsedTable:
             excel.Quit()
 
 
+def _read_excel_matrix_via_com(path: Path) -> list[list[Any]]:
+    if win32com is None:
+        raise InvoiceParseError(
+            "Файл Excel не удалось прочитать через pandas/xlrd, а win32com недоступен."
+        )
+
+    excel = None
+    workbook = None
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")  # type: ignore[union-attr]
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        workbook = excel.Workbooks.Open(str(path.resolve()), ReadOnly=True)
+        sheet = workbook.Worksheets(1)
+        used = sheet.UsedRange
+        rows_count = used.Rows.Count
+        cols_count = used.Columns.Count
+
+        matrix: list[list[Any]] = []
+        for r in range(1, rows_count + 1):
+            row: list[Any] = []
+            has_data = False
+            for c in range(1, cols_count + 1):
+                val = sheet.Cells(r, c).Value
+                row.append(val)
+                if _clean_text(val):
+                    has_data = True
+            if has_data:
+                matrix.append(row)
+        return matrix
+    except Exception as exc:
+        raise InvoiceParseError(f"Не удалось прочитать Excel через COM: {exc}") from exc
+    finally:
+        if workbook is not None:
+            workbook.Close(SaveChanges=False)
+        if excel is not None:
+            excel.Quit()
+
+
+def _find_header_row(
+    rows: list[list[Any]],
+    *,
+    required_term_groups: list[list[str]],
+) -> tuple[int | None, list[str]]:
+    for idx, row in enumerate(rows):
+        cells = [_clean_text(v).lower() for v in row]
+        if not any(cells):
+            continue
+        matches_all = True
+        for terms in required_term_groups:
+            if not any(any(term in cell for term in terms) for cell in cells):
+                matches_all = False
+                break
+        if matches_all:
+            return idx, [_clean_text(v) for v in row]
+    return None, []
+
+
+def _extract_order_status(rows: list[list[Any]]) -> str:
+    for row in rows:
+        for value in row:
+            text = _clean_text(value)
+            if not text:
+                continue
+            low = text.lower()
+            if low.startswith("статус заказа"):
+                return text.split(":", 1)[1].strip() if ":" in text else text
+    return ""
+
+
+def _row_value(row: list[Any], col: int | None) -> Any:
+    if col is None or col < 0 or col >= len(row):
+        return None
+    return row[col]
+
+
+def _pick_first_positive_float(row: list[Any], cols: list[int | None]) -> float:
+    fallback = 0.0
+    for col in cols:
+        value = _to_float(_row_value(row, col))
+        if value > 0:
+            return value
+        if value != 0:
+            fallback = value
+    return fallback
+
+
 def _find_col(cols: list[str], needles: list[str]) -> int | None:
     normalized = [c.lower().strip() for c in cols]
     for needle in needles:
@@ -283,6 +552,16 @@ def _extract_note_from_row(row: list[Any], note_cols: list[int]) -> str:
     # Keep source column order, avoid duplicate repeated values.
     unique_notes = list(dict.fromkeys(notes))
     return " | ".join(unique_notes)
+
+
+def _row_has_total_marker(row: list[Any]) -> bool:
+    for value in row:
+        text = _clean_text(value).lower()
+        if not text:
+            continue
+        if re.match(r"^итог(?:о)?\s*:?", text):
+            return True
+    return False
 
 
 def _extract_invoice_header(text: str) -> tuple[str, datetime | None]:

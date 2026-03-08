@@ -108,10 +108,10 @@ QMainWindow {
 QFrame#topCard, QFrame#logCard {
     background: #ffffff;
     border: 1px solid #d7e0ec;
-    border-radius: 10px;
+    border-radius: 8px;
 }
 QLabel#titleLabel {
-    font-size: 18pt;
+    font-size: 16pt;
     font-weight: 700;
     color: #0f172a;
 }
@@ -120,19 +120,48 @@ QLabel#subtitleLabel {
     font-size: 10pt;
 }
 QLabel#totalsPill {
-    color: #0f2b60;
-    font-size: 11pt;
-    font-weight: 700;
-    background: #eaf2ff;
-    border: 1px solid #c7d7f2;
-    border-radius: 8px;
-    padding: 6px 10px;
+    color: #1e3a8a;
+    font-size: 10pt;
+    font-weight: 600;
+    background: #f3f6fb;
+    border: 1px solid #d7e0ec;
+    border-radius: 7px;
+    padding: 4px 9px;
+}
+QLabel[pill="true"] {
+    font-size: 9.5pt;
+    font-weight: 600;
+    border-radius: 7px;
+    padding: 4px 9px;
+}
+QLabel[pill="true"][tone="found"] {
+    color: #21593a;
+    background: #edf8f0;
+    border: 1px solid #cce6d5;
+}
+QLabel[pill="true"][tone="ambiguous"] {
+    color: #334155;
+    background: #f1f5fb;
+    border: 1px solid #d8e0ee;
+}
+QLabel[pill="true"][tone="missing"] {
+    color: #7f1d1d;
+    background: #fdf1f1;
+    border: 1px solid #efcaca;
+}
+QLabel[pill="true"][tone="warning"] {
+    color: #6b5315;
+    background: #fdf9ec;
+    border: 1px solid #e8ddbe;
 }
 QLineEdit, QComboBox, QPlainTextEdit, QTableWidget {
     background: #ffffff;
     border: 1px solid #c7d3e3;
-    border-radius: 8px;
+    border-radius: 7px;
     padding: 6px 8px;
+}
+QLineEdit, QComboBox {
+    min-height: 32px;
 }
 QLineEdit:focus, QComboBox:focus, QTableWidget:focus, QPlainTextEdit:focus {
     border: 1px solid #3b82f6;
@@ -141,12 +170,41 @@ QComboBox::drop-down {
     border: none;
     width: 20px;
 }
+QTableWidget QComboBox {
+    min-height: 24px;
+    max-height: 24px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: #ffffff;
+}
+QTableWidget QComboBox[actionKind="import"] {
+    background: #ffffff;
+    color: #0f172a;
+    border: 1px solid #c7d3e3;
+}
+QTableWidget QComboBox[actionKind="create"] {
+    background: #eaf2ff;
+    color: #1e3a8a;
+    border: 1px solid #b8ccf0;
+}
+QTableWidget QComboBox[actionKind="skip"] {
+    background: #fdf1f1;
+    color: #7f1d1d;
+    border: 1px solid #efcaca;
+}
+QTableWidget QComboBox::drop-down {
+    width: 16px;
+}
+QTableWidget QComboBox QAbstractItemView::item {
+    min-height: 20px;
+}
 QPushButton {
     background: #e6edf8;
     color: #0f172a;
     border: 1px solid #c7d3e3;
-    border-radius: 8px;
-    padding: 7px 12px;
+    border-radius: 7px;
+    padding: 6px 12px;
+    min-height: 32px;
     font-weight: 600;
 }
 QPushButton:hover {
@@ -161,12 +219,20 @@ QPushButton#primaryBtn:hover {
     background: #1d4ed8;
 }
 QPushButton#successBtn {
-    background: #0f766e;
+    background: #2f855a;
     color: #ffffff;
-    border: 1px solid #0b5f58;
+    border: 1px solid #276749;
 }
 QPushButton#successBtn:hover {
-    background: #0b5f58;
+    background: #276749;
+}
+QPushButton#subtleBtn {
+    background: #f8fafc;
+    color: #334155;
+    border: 1px solid #d7e0ec;
+}
+QPushButton#subtleBtn:hover {
+    background: #eef3fa;
 }
 QGroupBox {
     border: 1px solid #dbe3ef;
@@ -251,11 +317,11 @@ QToolButton#helpBtn:hover {
     background: #dce9ff;
 }
 QToolButton#debugToggleBtn {
-    background: #dbe7f8;
+    background: #eef3fa;
     border: 1px solid #9fb0c8;
-    border-radius: 6px;
+    border-radius: 7px;
     color: #1e3a8a;
-    font-size: 8pt;
+    font-size: 9pt;
     font-weight: 700;
     padding: 0 4px;
 }
@@ -1210,14 +1276,14 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(6)
 
         header_card = QFrame(self)
         header_card.setObjectName("topCard")
         header_layout = QHBoxLayout(header_card)
-        header_layout.setContentsMargins(14, 10, 14, 10)
-        header_layout.setSpacing(12)
+        header_layout.setContentsMargins(10, 8, 10, 8)
+        header_layout.setSpacing(8)
 
         self.debug_toggle_btn = QToolButton(self)
         self.debug_toggle_btn.setObjectName("debugToggleBtn")
@@ -1227,97 +1293,141 @@ class MainWindow(QMainWindow):
         self.debug_toggle_btn.setCheckable(True)
         self.debug_toggle_btn.setChecked(False)
         self.debug_toggle_btn.setText("LOG")
-        self.debug_toggle_btn.setFixedSize(42, 22)
-        header_layout.addWidget(self.debug_toggle_btn, 0, Qt.AlignTop)
+        self.debug_toggle_btn.setFixedSize(54, 32)
 
         logo_path = Path(__file__).resolve().parent.parent / "store-business-and-finance-svgrepo-com.svg"
         if logo_path.exists():
             self.setWindowIcon(QIcon(str(logo_path)))
             logo = QSvgWidget(str(logo_path), self)
-            logo.setFixedSize(42, 42)
+            logo.setFixedSize(32, 32)
             header_layout.addWidget(logo, 0, Qt.AlignVCenter)
 
-        header_text = QVBoxLayout()
         title = QLabel("Dazzle", self)
         title.setObjectName("titleLabel")
-        subtitle = QLabel(
-            "Импорт накладных в Tirika: проверка, сопоставление и контроль цен",
-            self,
-        )
-        subtitle.setObjectName("subtitleLabel")
-        header_text.addWidget(title)
-        header_text.addWidget(subtitle)
-        header_layout.addLayout(header_text, 1)
-
-        self.db_state_label = QLabel("База: не открыта", self)
-        self.db_state_label.setObjectName("subtitleLabel")
-        self.db_state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.db_state_label.setVisible(False)
+        header_layout.addWidget(title, 0, Qt.AlignVCenter)
+        header_layout.addStretch(1)
 
         self.settings_btn = QPushButton("Настройки", self)
-        self.settings_btn.setObjectName("primaryBtn")
-        self.settings_btn.setMinimumWidth(130)
+        self.settings_btn.setObjectName("subtleBtn")
+        self.settings_btn.setMinimumWidth(120)
+        self.settings_btn.setMinimumHeight(32)
         self.settings_btn.setToolTip(
             "Открывает постоянные настройки: база, папка накладных, параметры импорта и автозапуск."
         )
-        header_layout.addWidget(self.settings_btn)
+        header_layout.addWidget(self.debug_toggle_btn, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.settings_btn, 0, Qt.AlignVCenter)
 
-        self.db_open_btn = QPushButton("Переподключить БД", self)
-        self.db_open_btn.setObjectName("primaryBtn")
-        self.db_open_btn.setMinimumWidth(170)
-        header_layout.addWidget(
-            self._with_help(
-                self.db_open_btn,
-                "Принудительно переподключает базу shop.db из текущих настроек.",
-            )
-        )
+        # Internal status holder (not shown in compact workspace).
+        self.db_state_label = QLabel("БД: не подключена", self)
+        self.db_state_label.setVisible(False)
         root.addWidget(header_card)
 
-        top_card = QFrame(self)
-        top_card.setObjectName("topCard")
-        top_layout = QVBoxLayout(top_card)
-        top_layout.setContentsMargins(10, 10, 10, 10)
-        top_layout.setSpacing(10)
+        controls_card = QFrame(self)
+        controls_card.setObjectName("topCard")
+        controls_layout = QVBoxLayout(controls_card)
+        controls_layout.setContentsMargins(10, 8, 10, 8)
+        controls_layout.setSpacing(6)
 
-        file_group = QGroupBox("Документ", self)
-        file_layout = QGridLayout(file_group)
-        file_layout.setHorizontalSpacing(10)
-        file_layout.setVerticalSpacing(8)
-
-        file_layout.addWidget(QLabel("Накладная:"), 0, 0)
+        context_row = QHBoxLayout()
+        context_row.setSpacing(8)
+        context_row.addWidget(QLabel("Накладная:"))
         self.invoice_file_combo = QComboBox(self)
-        self.invoice_file_combo.setMinimumWidth(520)
+        self.invoice_file_combo.setMinimumWidth(280)
         self.invoice_file_combo.setToolTip("Выберите Excel-файл накладной для загрузки.")
-        file_layout.addWidget(self.invoice_file_combo, 0, 1)
+        context_row.addWidget(self.invoice_file_combo, 1)
 
-        self.invoice_refresh_btn = QPushButton("Обновить список", self)
+        self.invoice_refresh_btn = QPushButton("Обновить", self)
+        self.invoice_refresh_btn.setObjectName("subtleBtn")
+        self.invoice_refresh_btn.setMinimumWidth(104)
+        self.invoice_refresh_btn.setMaximumWidth(104)
         self.invoice_refresh_btn.setToolTip("Перечитывает папку накладных и обновляет список Excel-файлов.")
-        file_layout.addWidget(self.invoice_refresh_btn, 0, 2)
+        context_row.addWidget(self.invoice_refresh_btn)
 
         self.load_invoice_btn = QPushButton("Загрузить", self)
         self.load_invoice_btn.setObjectName("primaryBtn")
+        self.load_invoice_btn.setMinimumWidth(108)
+        self.load_invoice_btn.setMaximumWidth(108)
         self.load_invoice_btn.setToolTip(
             "Загружает выбранную накладную в таблицу для проверки, сопоставления и импорта."
         )
-        file_layout.addWidget(self.load_invoice_btn, 0, 3)
+        context_row.addWidget(self.load_invoice_btn)
 
-        file_layout.addWidget(QLabel("Оплата в документе:"), 1, 0)
-        self.payment_combo = QComboBox(self)
-        _fill_payment_combo(self.payment_combo)
-        self.payment_combo.setToolTip("Тип оплаты для создаваемой закупки.")
-        file_layout.addWidget(self.payment_combo, 1, 1)
-        file_layout.addWidget(QLabel("Поставщик:"), 2, 0)
+        context_row.addSpacing(6)
+        context_row.addWidget(QLabel("Поставщик:"))
         self.supplier_combo = QComboBox(self)
+        self.supplier_combo.setMinimumWidth(200)
+        self.supplier_combo.setMaximumWidth(320)
         self.supplier_combo.setToolTip(
             "Поставщик документа для импорта. Определяется автоматически по накладной, "
             "при необходимости можно выбрать вручную."
         )
-        file_layout.addWidget(self.supplier_combo, 2, 1)
+        context_row.addWidget(self.supplier_combo)
+
+        self.payment_combo = QComboBox(self)
+        _fill_payment_combo(self.payment_combo)
+        self.payment_combo.setMinimumWidth(120)
+        self.payment_combo.setMaximumWidth(120)
+        self.payment_combo.setToolTip("Тип оплаты для создаваемой закупки.")
+        context_row.addWidget(self.payment_combo)
+
+        self.invoice_totals_label = QLabel("Кол-во: 0 | Сумма: 0", self)
+        self.invoice_totals_label.setObjectName("totalsPill")
+        self.invoice_totals_label.setMinimumWidth(230)
+        self.invoice_totals_label.setMaximumWidth(320)
+        self.invoice_totals_label.setMinimumHeight(32)
+        self.invoice_totals_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        context_row.addWidget(self.invoice_totals_label)
+        controls_layout.addLayout(context_row)
+
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+
+        self.pick_btn = QPushButton("Назначить товар вручную", self)
+        self.pick_btn.setMinimumWidth(210)
+        self.pick_btn.setMaximumWidth(230)
+        self.pick_btn.setToolTip("Ручной выбор товара для текущей строки.")
+        actions_row.addWidget(self.pick_btn)
+
+        self.apply_suggested_price_btn = QPushButton("Применить цену +50%", self)
+        self.apply_suggested_price_btn.setMinimumWidth(180)
+        self.apply_suggested_price_btn.setMaximumWidth(210)
+        self.apply_suggested_price_btn.setToolTip(
+            "Ставит рассчитанную цену (+наценка и округление) для выделенных или всех строк."
+        )
+        actions_row.addWidget(self.apply_suggested_price_btn)
+
+        self.undo_btn = QPushButton("Назад", self)
+        self.redo_btn = QPushButton("Вперед", self)
+        self.undo_btn.setMinimumWidth(86)
+        self.undo_btn.setMaximumWidth(86)
+        self.redo_btn.setMinimumWidth(86)
+        self.redo_btn.setMaximumWidth(86)
+        self.undo_btn.setToolTip("Отменить последнее изменение в таблице.")
+        self.redo_btn.setToolTip("Вернуть отмененное изменение.")
+        self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(False)
+        actions_row.addWidget(self.undo_btn)
+        actions_row.addWidget(self.redo_btn)
+        actions_row.addStretch(1)
+        controls_layout.addLayout(actions_row)
+
+        for widget in (
+            self.invoice_file_combo,
+            self.invoice_refresh_btn,
+            self.load_invoice_btn,
+            self.supplier_combo,
+            self.payment_combo,
+            self.pick_btn,
+            self.apply_suggested_price_btn,
+            self.undo_btn,
+            self.redo_btn,
+        ):
+            widget.setMinimumHeight(32)
+
+        # Keep text sink for legacy status updates, hidden in compact layout.
         self.supplier_detect_label = QLabel("Автоопределение поставщика: ожидается загрузка накладной", self)
-        self.supplier_detect_label.setObjectName("subtitleLabel")
-        self.supplier_detect_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        file_layout.addWidget(self.supplier_detect_label, 2, 2, 1, 2)
-        file_layout.setColumnStretch(1, 1)
+        self.supplier_detect_label.setVisible(False)
+        root.addWidget(controls_card)
 
         # Постоянные параметры импорта скрыты с главного экрана и настраиваются в диалоге "Настройки".
         self.user_combo = QComboBox()
@@ -1329,45 +1439,6 @@ class MainWindow(QMainWindow):
         self.auto_pay_cb = QCheckBox()
         self.backup_cb = QCheckBox()
         self._apply_settings_to_runtime_controls()
-
-        actions_group = QGroupBox("Действия", self)
-        actions = QHBoxLayout(actions_group)
-        actions.setContentsMargins(10, 10, 10, 10)
-        actions.setSpacing(10)
-        self.match_btn = QPushButton("Найти товары автоматически", self)
-        self.pick_btn = QPushButton("Назначить товар вручную", self)
-        self.apply_suggested_price_btn = QPushButton("Применить цену +50%", self)
-        self.import_btn = QPushButton("Импорт в базу", self)
-        self.import_btn.setObjectName("successBtn")
-        self.match_btn.setToolTip("Автоматически ищет товары в базе по артикулу и названию.")
-        self.pick_btn.setToolTip("Ручной выбор товара для текущей строки.")
-        self.apply_suggested_price_btn.setToolTip(
-            "Ставит рассчитанную цену (+наценка и округление) для выделенных или красных строк."
-        )
-        self.import_btn.setToolTip("Выполняет реальную запись накладной в базу Tirika.")
-        actions.addWidget(self.match_btn)
-        actions.addWidget(self.pick_btn)
-        actions.addSpacing(8)
-        actions.addWidget(self.apply_suggested_price_btn)
-        self.undo_btn = QPushButton("Назад", self)
-        self.redo_btn = QPushButton("Вперед", self)
-        self.undo_btn.setToolTip("Отменить последнее изменение в таблице.")
-        self.redo_btn.setToolTip("Вернуть отмененное изменение.")
-        self.undo_btn.setEnabled(False)
-        self.redo_btn.setEnabled(False)
-        actions.addWidget(self.undo_btn)
-        actions.addWidget(self.redo_btn)
-        self.invoice_totals_label = QLabel("Товаров: 0 | Сумма накладной: 0", self)
-        self.invoice_totals_label.setObjectName("totalsPill")
-        self.invoice_totals_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.invoice_totals_label.setMinimumWidth(360)
-        actions.addWidget(self.invoice_totals_label)
-        actions.addStretch(1)
-        actions.addWidget(self.import_btn)
-
-        top_layout.addWidget(file_group)
-        top_layout.addWidget(actions_group)
-        root.addWidget(top_card)
 
         self.table = QTableWidget(self)
         self.table.setColumnCount(19)
@@ -1434,21 +1505,56 @@ class MainWindow(QMainWindow):
         footer_card = QFrame(self)
         footer_card.setObjectName("topCard")
         footer_layout = QHBoxLayout(footer_card)
-        footer_layout.setContentsMargins(10, 8, 10, 8)
-        footer_layout.setSpacing(10)
-        self.summary_label = QLabel("Готово к работе.", self)
-        self.summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.summary_label.setObjectName("subtitleLabel")
-        footer_layout.addWidget(self.summary_label, 1)
+        footer_layout.setContentsMargins(10, 6, 10, 6)
+        footer_layout.setSpacing(8)
+
+        self.footer_found_label = QLabel("Найдено: 0/0", self)
+        self.footer_found_label.setProperty("pill", "true")
+        self.footer_found_label.setProperty("tone", "found")
+        self.footer_found_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        footer_layout.addWidget(self.footer_found_label)
+
+        self.footer_ambiguous_label = QLabel("Неоднозначно: 0", self)
+        self.footer_ambiguous_label.setProperty("pill", "true")
+        self.footer_ambiguous_label.setProperty("tone", "ambiguous")
+        self.footer_ambiguous_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        footer_layout.addWidget(self.footer_ambiguous_label)
+
+        self.footer_missing_label = QLabel("Не найдено: 0", self)
+        self.footer_missing_label.setProperty("pill", "true")
+        self.footer_missing_label.setProperty("tone", "missing")
+        self.footer_missing_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        footer_layout.addWidget(self.footer_missing_label)
+
+        self.footer_warning_label = QLabel("Предупреждения: 0", self)
+        self.footer_warning_label.setProperty("pill", "true")
+        self.footer_warning_label.setProperty("tone", "warning")
+        self.footer_warning_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        footer_layout.addWidget(self.footer_warning_label)
+
+        for metric in (
+            self.footer_found_label,
+            self.footer_ambiguous_label,
+            self.footer_missing_label,
+            self.footer_warning_label,
+        ):
+            metric.setMinimumHeight(32)
+
+        footer_layout.addStretch(1)
+
+        self.import_btn = QPushButton("Импорт в базу", self)
+        self.import_btn.setObjectName("successBtn")
+        self.import_btn.setMinimumWidth(168)
+        self.import_btn.setMaximumWidth(200)
+        self.import_btn.setToolTip("Выполняет реальную запись накладной в базу Tirika.")
+        footer_layout.addWidget(self.import_btn)
         root.addWidget(footer_card)
 
         self.settings_btn.clicked.connect(self._open_settings_dialog)
-        self.db_open_btn.clicked.connect(self._open_db)
         self.debug_toggle_btn.toggled.connect(self._set_debug_log_enabled)
         self.invoice_refresh_btn.clicked.connect(self._refresh_invoice_files)
         self.load_invoice_btn.clicked.connect(self._load_invoice)
         self.invoice_file_combo.activated.connect(lambda _: self._load_invoice())
-        self.match_btn.clicked.connect(self._run_matching)
         self.pick_btn.clicked.connect(self._pick_good_for_selected)
         self.apply_suggested_price_btn.clicked.connect(self._apply_suggested_prices)
         self.undo_btn.clicked.connect(self._undo_history)
@@ -1848,7 +1954,8 @@ class MainWindow(QMainWindow):
         if not new_db_path:
             self.db = None
             self.matcher = None
-            self.db_state_label.setText("База: не указана")
+            self.db_state_label.setText("БД: не указана")
+            self.db_state_label.setToolTip("")
             return
 
         if self.db is None or new_db_path != previous_db_path:
@@ -1861,7 +1968,8 @@ class MainWindow(QMainWindow):
     def _open_db(self) -> None:
         raw = self.app_settings.db_path.strip()
         if not raw:
-            self.db_state_label.setText("База: не указана")
+            self.db_state_label.setText("БД: не указана")
+            self.db_state_label.setToolTip("")
             self._error("Укажите путь к shop.db в настройках.")
             return
 
@@ -1875,13 +1983,15 @@ class MainWindow(QMainWindow):
             self.db = TirikaDB(db_path)
             self._load_reference_data()
             self._log(f"База открыта: {db_path}")
-            self.db_state_label.setText(f"База: {db_path}")
+            self.db_state_label.setText("БД: подключена")
+            self.db_state_label.setToolTip(str(db_path))
             if self.current_invoice is not None:
                 self._run_matching()
         except Exception as exc:
             self.db = None
             self.matcher = None
-            self.db_state_label.setText("База: ошибка открытия")
+            self.db_state_label.setText("БД: ошибка подключения")
+            self.db_state_label.setToolTip("")
             self._error("Ошибка открытия базы", exc=exc)
 
     def _load_reference_data(self) -> None:
@@ -2263,15 +2373,17 @@ class MainWindow(QMainWindow):
                 combo.addItem("import")
                 combo.addItem("create")
                 combo.addItem("skip")
+                combo.setFixedHeight(24)
                 action = line.action if line.action in {"import", "create", "skip"} else "skip"
                 combo.setCurrentText(action)
+                self._apply_action_combo_visual(combo, action)
                 combo.currentTextChanged.connect(
                     lambda val, row_idx=row: self._on_action_changed(row_idx, val)
                 )
                 self.table.setCellWidget(row, COL_ACTION, combo)
 
-            self.summary_label.setText(self._build_summary(lines))
             self.invoice_totals_label.setText(self._build_invoice_totals(lines))
+            self._update_footer_metrics(lines)
             if lines and not self._column_layout_initialized:
                 self._restoring_header_state = True
                 try:
@@ -2390,6 +2502,9 @@ class MainWindow(QMainWindow):
         if self.current_invoice is None:
             return
         if 0 <= row < len(self.current_invoice.lines):
+            combo = self.table.cellWidget(row, COL_ACTION)
+            if isinstance(combo, QComboBox):
+                self._apply_action_combo_visual(combo, action)
             line = self.current_invoice.lines[row]
             changed = line.action != action
             if line.action != action:
@@ -2398,6 +2513,13 @@ class MainWindow(QMainWindow):
             if changed:
                 self._record_history_state()
             self._apply_table_filter()
+
+    def _apply_action_combo_visual(self, combo: QComboBox, action: str) -> None:
+        state = action if action in {"import", "create", "skip"} else "import"
+        combo.setProperty("actionKind", state)
+        combo.style().unpolish(combo)
+        combo.style().polish(combo)
+        combo.update()
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._table_locked:
@@ -2596,18 +2718,33 @@ class MainWindow(QMainWindow):
             return QColor(255, 210, 210)
         return None
 
-    def _build_summary(self, lines: list[InvoiceLine]) -> str:
+    def _summary_metrics(
+        self,
+        lines: list[InvoiceLine],
+    ) -> tuple[int, int, int, int, int]:
+        found = sum(1 for x in lines if x.match_status in {"exact", "manual", "fuzzy"})
         total = len(lines)
-        exact = sum(1 for x in lines if x.match_status in {"exact", "manual"})
-        fuzzy = sum(1 for x in lines if x.match_status == "fuzzy")
-        hints = sum(1 for x in lines if x.match_status == "hint")
         ambiguous = sum(1 for x in lines if x.match_status == "ambiguous")
         missing = sum(1 for x in lines if x.match_status == "not_found")
-        price_alerts = sum(1 for x in lines if x.price_alert)
+        warning_count = sum(1 for x in lines if bool(x.warning.strip()) or x.price_alert)
+        return found, total, ambiguous, missing, warning_count
+
+    def _build_summary(self, lines: list[InvoiceLine]) -> str:
+        found, total, ambiguous, missing, warning_count = self._summary_metrics(lines)
+        if not lines:
+            return "Статус: выберите и загрузите накладную."
         return (
-            f"Строк: {total} | Найдено: {exact} | По названию: {fuzzy} | "
-            f"Похожие (1): {hints} | Неоднозначно: {ambiguous} | Не найдено: {missing} | Цена-красных: {price_alerts}"
+            f"Найдено: {found}/{total} | "
+            f"Неоднозначно: {ambiguous} | Не найдено: {missing} | "
+            f"Предупреждения: {warning_count}"
         )
+
+    def _update_footer_metrics(self, lines: list[InvoiceLine]) -> None:
+        found, total, ambiguous, missing, warning_count = self._summary_metrics(lines)
+        self.footer_found_label.setText(f"Найдено: {found}/{total}")
+        self.footer_ambiguous_label.setText(f"Неоднозначно: {ambiguous}")
+        self.footer_missing_label.setText(f"Не найдено: {missing}")
+        self.footer_warning_label.setText(f"Предупреждения: {warning_count}")
 
     def _build_invoice_totals(self, lines: list[InvoiceLine]) -> str:
         total_qty = sum(max(float(x.quantity), 0.0) for x in lines)
@@ -2616,8 +2753,8 @@ class MainWindow(QMainWindow):
             for x in lines
         )
         return (
-            f"Товаров: {_fmt_number(total_qty, 3)} | "
-            f"Сумма накладной: {_fmt_number(total_sum, 2)}"
+            f"Кол-во: {_fmt_number(total_qty, 3)} | "
+            f"Сумма: {_fmt_number(total_sum, 2)}"
         )
 
     def _selected_data(self, combo: QComboBox, default: int) -> int:
@@ -2661,8 +2798,8 @@ class MainWindow(QMainWindow):
             return
         for row in range(len(self.current_invoice.lines)):
             self.table.setRowHidden(row, False)
-        self.summary_label.setText(self._build_summary(self.current_invoice.lines))
         self.invoice_totals_label.setText(self._build_invoice_totals(self.current_invoice.lines))
+        self._update_footer_metrics(self.current_invoice.lines)
 
     def _log(self, text: str) -> None:
         message = str(text)
