@@ -5,9 +5,10 @@ from datetime import datetime
 import os
 from pathlib import Path
 import re
+import sys
 import traceback
 
-from PySide6.QtCore import QByteArray, QTimer, Qt, Signal
+from PySide6.QtCore import QByteArray, QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QMenu,
     QPushButton,
+    QProgressDialog,
     QPlainTextEdit,
     QSplitter,
     QTableWidget,
@@ -396,6 +398,30 @@ QLabel#resultTagCreate {
     font-weight: 700;
 }
 """
+
+
+class UpdateDownloadWorker(QObject):
+    progress = Signal(int, int)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, update: UpdateInfo, target_dir: Path) -> None:
+        super().__init__()
+        self._update = update
+        self._target_dir = target_dir
+
+    def run(self) -> None:
+        try:
+            installer_path = download_installer(
+                self._update,
+                self._target_dir,
+                progress_cb=lambda done, total: self.progress.emit(int(done), int(total)),
+            )
+            self.finished.emit(str(installer_path))
+        except UpdateError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class GoodsPickerDialog(QDialog):
@@ -1267,6 +1293,10 @@ class MainWindow(QMainWindow):
         self._column_state_save_timer.timeout.connect(
             lambda: self._save_table_header_state(silent=True)
         )
+        self._update_download_thread: QThread | None = None
+        self._update_download_worker: UpdateDownloadWorker | None = None
+        self._update_progress_dialog: QProgressDialog | None = None
+        self._pending_update_info: UpdateInfo | None = None
 
         self._build_ui()
         self._apply_styles()
@@ -1388,12 +1418,13 @@ class MainWindow(QMainWindow):
         self.pick_btn.setToolTip("Ручной выбор товара для текущей строки.")
         actions_row.addWidget(self.pick_btn)
 
-        self.apply_suggested_price_btn = QPushButton("Применить цену +50%", self)
-        self.apply_suggested_price_btn.setMinimumWidth(180)
-        self.apply_suggested_price_btn.setMaximumWidth(210)
+        self.apply_suggested_price_btn = QPushButton("", self)
+        self.apply_suggested_price_btn.setMinimumWidth(200)
+        self.apply_suggested_price_btn.setMaximumWidth(250)
         self.apply_suggested_price_btn.setToolTip(
             "Ставит рассчитанную цену (+наценка и округление) для выделенных или всех строк."
         )
+        self._refresh_apply_markup_button_text()
         actions_row.addWidget(self.apply_suggested_price_btn)
 
         self.undo_btn = QPushButton("Назад", self)
@@ -1732,11 +1763,75 @@ class MainWindow(QMainWindow):
         self._download_and_install_update(update)
 
     def _download_and_install_update(self, update: UpdateInfo) -> None:
+        if self._update_download_thread is not None and self._update_download_thread.isRunning():
+            QMessageBox.information(self, "Обновление", "Скачивание обновления уже выполняется.")
+            return
+
+        self._pending_update_info = update
+        self._log(f"Скачивание обновления {update.version}...")
+
+        progress = QProgressDialog(
+            f"Скачивание обновления {update.version}...",
+            "",
+            0,
+            0,
+            self,
+        )
+        progress.setWindowTitle("Обновление")
+        progress.setWindowModality(Qt.ApplicationModal)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+        self._update_progress_dialog = progress
+
+        self._update_download_thread = QThread(self)
+        self._update_download_worker = UpdateDownloadWorker(update, self._update_cache_dir())
+        self._update_download_worker.moveToThread(self._update_download_thread)
+
+        self._update_download_thread.started.connect(self._update_download_worker.run)
+        self._update_download_worker.progress.connect(self._on_update_download_progress)
+        self._update_download_worker.finished.connect(self._on_update_download_finished)
+        self._update_download_worker.failed.connect(self._on_update_download_failed)
+        self._update_download_worker.finished.connect(self._update_download_thread.quit)
+        self._update_download_worker.failed.connect(self._update_download_thread.quit)
+        self._update_download_thread.finished.connect(self._cleanup_update_download_worker)
+        self._update_download_thread.start()
+
+    def _on_update_download_progress(self, downloaded: int, total: int) -> None:
+        if self._update_progress_dialog is None:
+            return
+        if total > 0:
+            percent = int(max(0, min(100, round(downloaded * 100 / total))))
+            self._update_progress_dialog.setRange(0, 100)
+            self._update_progress_dialog.setValue(percent)
+            self._update_progress_dialog.setLabelText(
+                f"Скачивание обновления... {percent}% "
+                f"({self._format_bytes(downloaded)} / {self._format_bytes(total)})"
+            )
+        else:
+            self._update_progress_dialog.setRange(0, 0)
+            self._update_progress_dialog.setLabelText(
+                f"Скачивание обновления... {self._format_bytes(downloaded)}"
+            )
+
+    def _on_update_download_finished(self, installer_path_raw: str) -> None:
+        installer_path = Path(installer_path_raw)
+        update_version = (
+            self._pending_update_info.version
+            if self._pending_update_info is not None
+            else "новой версии"
+        )
+        self._log(f"Установщик скачан: {installer_path}")
+
+        relaunch_executable: Path | None = None
+        if getattr(sys, "frozen", False):
+            relaunch_executable = Path(sys.executable)
+
         try:
-            self._log(f"Скачивание обновления {update.version}...")
-            installer_path = download_installer(update, self._update_cache_dir())
-            self._log(f"Установщик скачан: {installer_path}")
-            run_installer(installer_path)
+            run_installer(installer_path, relaunch_executable=relaunch_executable)
         except UpdateError as exc:
             QMessageBox.critical(self, "Обновления", str(exc))
             return
@@ -1746,12 +1841,41 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Обновление",
-            "Установщик запущен.\n"
-            "Приложение закроется, затем обновление установится автоматически.",
+            f"Обновление {update_version} скачано и установка запущена.\n"
+            "После установки Dazzle автоматически запустится снова.",
         )
         app = QApplication.instance()
         if app is not None:
             app.quit()
+
+    def _on_update_download_failed(self, message: str) -> None:
+        self._log(f"Ошибка обновления: {message}")
+        QMessageBox.critical(self, "Обновления", message)
+
+    def _cleanup_update_download_worker(self) -> None:
+        if self._update_progress_dialog is not None:
+            self._update_progress_dialog.close()
+            self._update_progress_dialog.deleteLater()
+            self._update_progress_dialog = None
+        if self._update_download_worker is not None:
+            self._update_download_worker.deleteLater()
+            self._update_download_worker = None
+        if self._update_download_thread is not None:
+            self._update_download_thread.deleteLater()
+            self._update_download_thread = None
+        self._pending_update_info = None
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        size = max(0, float(value))
+        units = ["Б", "КБ", "МБ", "ГБ"]
+        unit_idx = 0
+        while size >= 1024.0 and unit_idx < len(units) - 1:
+            size /= 1024.0
+            unit_idx += 1
+        if unit_idx == 0:
+            return f"{int(size)} {units[unit_idx]}"
+        return f"{size:.1f} {units[unit_idx]}"
 
     def _reset_history(self) -> None:
         self._history.clear()
@@ -1877,6 +2001,13 @@ class MainWindow(QMainWindow):
             combo.blockSignals(True)
             self._set_combo_by_data(combo, target)
             combo.blockSignals(False)
+        self._refresh_apply_markup_button_text()
+
+    def _refresh_apply_markup_button_text(self) -> None:
+        if not hasattr(self, "apply_suggested_price_btn"):
+            return
+        markup_value = _fmt_number(float(self.app_settings.markup_percent), 1)
+        self.apply_suggested_price_btn.setText(f"Применить наценку +{markup_value}%")
 
     @staticmethod
     def _set_combo_by_data(combo: QComboBox, target: int) -> None:
@@ -2284,7 +2415,7 @@ class MainWindow(QMainWindow):
                 sell_price = line.sell_price if line.sell_price is not None else line.price
                 sell_old = self._display_sell_price_in_db(line)
                 diff_pct = line.sell_price_diff_percent
-                markup_pct = self._calculate_markup_percent(buy_price=line.price, sell_price=sell_old)
+                markup_pct = self._calculate_markup_percent(buy_price=line.price, sell_price=sell_price)
                 values = [
                     str(line.line_no),
                     line.article,

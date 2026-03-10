@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -47,7 +49,12 @@ def check_for_update(current_version: str, manifest_url: str, timeout_sec: float
     return info
 
 
-def download_installer(update: UpdateInfo, target_dir: Path, timeout_sec: float = 45.0) -> Path:
+def download_installer(
+    update: UpdateInfo,
+    target_dir: Path,
+    timeout_sec: float = 45.0,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     name = _installer_filename(update)
     final_path = target_dir / name
@@ -56,11 +63,19 @@ def download_installer(update: UpdateInfo, target_dir: Path, timeout_sec: float 
     req = Request(update.installer_url, headers={"User-Agent": "Dazzle-Updater/1.0"})
     try:
         with urlopen(req, timeout=timeout_sec) as resp, temp_path.open("wb") as out:
+            total_raw = resp.headers.get("Content-Length", "").strip()
+            total_bytes = int(total_raw) if total_raw.isdigit() else 0
+            downloaded = 0
+            if progress_cb is not None:
+                progress_cb(0, total_bytes)
             while True:
                 chunk = resp.read(1024 * 256)
                 if not chunk:
                     break
                 out.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb is not None:
+                    progress_cb(downloaded, total_bytes)
     except Exception as exc:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
@@ -81,20 +96,21 @@ def download_installer(update: UpdateInfo, target_dir: Path, timeout_sec: float 
     return final_path
 
 
-def run_installer(installer_path: Path) -> None:
+def run_installer(
+    installer_path: Path,
+    *,
+    relaunch_executable: Path | None = None,
+) -> None:
     if not installer_path.exists():
         raise UpdateError(f"Файл установщика не найден: {installer_path}")
 
-    args = [
-        str(installer_path),
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "/CLOSEAPPLICATIONS",
-        "/FORCECLOSEAPPLICATIONS",
-    ]
     try:
-        subprocess.Popen(args)
+        args = _installer_args(installer_path)
+        if relaunch_executable is None:
+            subprocess.Popen(args)
+            return
+
+        _run_installer_with_relaunch(args, relaunch_executable)
     except Exception as exc:
         raise UpdateError(f"Не удалось запустить установщик: {exc}") from exc
 
@@ -147,3 +163,40 @@ def _fetch_manifest(manifest_url: str, timeout_sec: float) -> dict[str, object]:
         raise UpdateError("Manifest должен быть JSON-объектом.")
     return raw
 
+
+def _installer_args(installer_path: Path) -> list[str]:
+    return [
+        str(installer_path),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/FORCECLOSEAPPLICATIONS",
+    ]
+
+
+def _run_installer_with_relaunch(installer_args: list[str], relaunch_executable: Path) -> None:
+    relaunch_path = Path(relaunch_executable)
+    if not relaunch_path.exists():
+        raise UpdateError(f"Не найден исполняемый файл для перезапуска: {relaunch_path}")
+
+    # Run installer and, after completion, start app again from a detached CMD script.
+    script_path = Path(tempfile.gettempdir()) / "dazzle_update_relaunch.cmd"
+    cmd_line = subprocess.list2cmdline(installer_args)
+    script = (
+        "@echo off\r\n"
+        "setlocal\r\n"
+        f"{cmd_line}\r\n"
+        "timeout /t 2 /nobreak >nul\r\n"
+        f"if exist \"{relaunch_path}\" start \"\" \"{relaunch_path}\"\r\n"
+        "del \"%~f0\" >nul 2>nul\r\n"
+    )
+    script_path.write_text(script, encoding="cp1251", errors="ignore")
+
+    creation_flags = 0
+    creation_flags |= int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    creation_flags |= int(getattr(subprocess, "DETACHED_PROCESS", 0))
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script_path)],
+        creationflags=creation_flags,
+    )

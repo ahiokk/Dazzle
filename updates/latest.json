@@ -1,6 +1,6 @@
 {
-  "version": "1.0.7",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.7/Dazzle-Setup-1.0.7.exe",
-  "sha256": "d90766b25db4207272e4dfb24b7e915cbe5637cdf644eb879406ab282c42f750",
-  "notes": "Добавили поддержку накладных МОСКВОРЕЧЬЕ и ФОРУМ. Обновили интерфейс: он стал компактнее и удобнее, а действия import / create / skip теперь имеют свои цвета для быстрого визуального различия."
+  "version": "1.0.8",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.8/Dazzle-Setup-1.0.8.exe",
+  "sha256": "daa8d9fb2645edbd06d3196f6ce73bab06a55b7c27ce15a16281bd85c22b23d2",
+  "notes": "Исправлена наценка и кнопка \"Применить наценку\"."
 }
