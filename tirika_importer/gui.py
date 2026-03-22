@@ -8,10 +8,11 @@ import re
 import sys
 import traceback
 
-from PySide6.QtCore import QByteArray, QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QByteArray, QEvent, QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -35,6 +36,9 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPlainTextEdit,
     QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -88,6 +92,7 @@ DB_ONLY_COLUMNS = (
 )
 
 MAX_HISTORY_STATES = 80
+ROLE_SELL_DB_OLD_PRICE = Qt.UserRole + 101
 
 PAYMENT_OPTIONS: tuple[tuple[str, int], ...] = (
     ("Наличные", 0),
@@ -422,6 +427,52 @@ class UpdateDownloadWorker(QObject):
             self.failed.emit(str(exc))
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+class SellDbPriceDelegate(QStyledItemDelegate):
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        old_price = str(index.data(ROLE_SELL_DB_OLD_PRICE) or "").strip()
+        if not old_price:
+            super().paint(painter, option, index)
+            return
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        visible_new_price = opt.text
+        opt.text = ""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        text_rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        text_rect.adjust(4, 0, -4, 0)
+
+        old_text = f"({old_price}) "
+        new_text = visible_new_price
+        metrics = QFontMetrics(opt.font)
+        full_text = old_text + new_text
+        full_width = metrics.horizontalAdvance(full_text)
+
+        if opt.displayAlignment & Qt.AlignRight:
+            x = text_rect.right() - full_width + 1
+        elif opt.displayAlignment & Qt.AlignHCenter:
+            x = text_rect.left() + max(0, (text_rect.width() - full_width) // 2)
+        else:
+            x = text_rect.left()
+
+        y = text_rect.top() + (text_rect.height() + metrics.ascent() - metrics.descent()) // 2
+        if opt.state & QStyle.State_Selected:
+            new_color = opt.palette.color(QPalette.HighlightedText)
+            old_color = QColor(190, 199, 213)
+        else:
+            new_color = opt.palette.color(QPalette.Text)
+            old_color = QColor(141, 153, 171)
+
+        painter.save()
+        painter.setPen(old_color)
+        painter.drawText(x, y, old_text)
+        painter.setPen(new_color)
+        painter.drawText(x + metrics.horizontalAdvance(old_text), y, new_text)
+        painter.restore()
 
 
 class GoodsPickerDialog(QDialog):
@@ -1482,8 +1533,8 @@ class MainWindow(QMainWindow):
                 "Кол-во",
                 "Закуп",
                 "Сумма",
-                "Продажа (новая)",
-                "Продажа в БД",
+                "Продажа (Новая)",
+                "Продажа (БД)",
                 "Δ, %",
                 "Наценка, %",
                 "Статус",
@@ -1506,9 +1557,11 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(28)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(
-            lambda pos: _show_table_copy_menu(self.table, pos, self)
-        )
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self._sell_db_delegate = SellDbPriceDelegate(self.table)
+        self.table.setItemDelegateForColumn(COL_SELL_PRICE_OLD, self._sell_db_delegate)
+        self.table.installEventFilter(self)
+        self.table.viewport().installEventFilter(self)
         self.table.setWordWrap(False)
 
         self.log_card = QFrame(self)
@@ -2463,6 +2516,17 @@ class MainWindow(QMainWindow):
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     if col in {COL_STATUS, COL_WARNING, COL_GOOD_CODE, COL_GOOD_NAME, COL_METHOD}:
                         item.setForeground(QColor(20, 20, 20))
+                    if col == COL_SELL_PRICE_OLD:
+                        old_db_price = line.existing_sell_price
+                        show_db_price = sell_old
+                        if (
+                            old_db_price is not None
+                            and show_db_price is not None
+                            and abs(show_db_price - old_db_price) > 0.0001
+                        ):
+                            item.setData(ROLE_SELL_DB_OLD_PRICE, _fmt_number(old_db_price, 2))
+                        else:
+                            item.setData(ROLE_SELL_DB_OLD_PRICE, "")
                     if col == COL_STATUS:
                         font = item.font()
                         font.setBold(True)
@@ -2630,7 +2694,13 @@ class MainWindow(QMainWindow):
             # User can override sale price that will be written to DB
             # via editable "Продажа в БД" column.
             raw_sell_db = self._item_text(row, COL_SELL_PRICE_OLD).strip()
-            if raw_sell_db:
+            expected_db_sell = self._display_sell_price_in_db(line)
+            expected_db_text = (
+                _fmt_number(expected_db_sell, 2) if expected_db_sell is not None else ""
+            )
+            raw_sell_db_norm = raw_sell_db.replace(" ", "").replace(",", ".")
+            expected_db_norm = expected_db_text.replace(" ", "").replace(",", ".")
+            if raw_sell_db and raw_sell_db_norm != expected_db_norm:
                 db_sell_default = (
                     line.existing_sell_price
                     if line.existing_sell_price is not None
@@ -2673,6 +2743,120 @@ class MainWindow(QMainWindow):
             if changed:
                 self._record_history_state()
             self._apply_table_filter()
+
+    def _selected_rows(self) -> list[int]:
+        if self.current_invoice is None:
+            return []
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if not rows:
+            current_row = self.table.currentRow()
+            if current_row >= 0:
+                rows = [current_row]
+        return [row for row in rows if 0 <= row < len(self.current_invoice.lines)]
+
+    def _delete_selected_rows(self) -> None:
+        if self.current_invoice is None:
+            return
+        if self.table.state() == QAbstractItemView.EditingState:
+            return
+        rows = self._selected_rows()
+        if not rows:
+            return
+        for row in reversed(rows):
+            del self.current_invoice.lines[row]
+        self._populate_table(self.current_invoice.lines)
+        self._record_history_state()
+        self._log(f"Удалено строк: {len(rows)}.")
+
+    def _set_action_for_selected_rows(self, action: str) -> None:
+        if self.current_invoice is None:
+            return
+        rows = self._selected_rows()
+        if not rows:
+            return
+        changed = 0
+        for row in rows:
+            line = self.current_invoice.lines[row]
+            if line.action != action:
+                line.action = action
+                line.raw_data["_manual_edited"] = True
+                changed += 1
+        if changed > 0:
+            self._populate_table(self.current_invoice.lines)
+            self._record_history_state()
+            self._log(f"Для выбранных строк выставлено действие '{action}'.")
+
+    def _on_table_context_menu(self, pos) -> None:
+        row = self.table.rowAt(pos.y())
+        col = self.table.columnAt(pos.x())
+        if row >= 0 and col >= 0 and row not in self._selected_rows():
+            self.table.clearSelection()
+            self.table.setCurrentCell(row, col)
+            self.table.selectRow(row)
+
+        menu = QMenu(self)
+        action_copy_cell = menu.addAction("Копировать ячейку")
+        action_copy_row = menu.addAction("Копировать строку")
+        action_copy_selection = menu.addAction("Копировать выделенное")
+        menu.addSeparator()
+        action_pick_good = menu.addAction("Назначить товар вручную")
+        action_apply_markup = menu.addAction(self.apply_suggested_price_btn.text())
+        action_import_now = menu.addAction("Импорт в базу")
+        menu.addSeparator()
+        action_set_import = menu.addAction("Поставить действие: import")
+        action_set_create = menu.addAction("Поставить действие: create")
+        action_set_skip = menu.addAction("Поставить действие: skip")
+        menu.addSeparator()
+        action_delete_rows = menu.addAction("Удалить выбранные строки")
+
+        has_rows = bool(self._selected_rows())
+        for action in (
+            action_pick_good,
+            action_apply_markup,
+            action_import_now,
+            action_set_import,
+            action_set_create,
+            action_set_skip,
+            action_delete_rows,
+        ):
+            action.setEnabled(has_rows and self.current_invoice is not None)
+
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen == action_copy_cell:
+            _copy_current_cell(self.table)
+        elif chosen == action_copy_row:
+            _copy_current_row(self.table)
+        elif chosen == action_copy_selection:
+            _copy_selected_cells(self.table)
+        elif chosen == action_pick_good:
+            self._pick_good_for_selected()
+        elif chosen == action_apply_markup:
+            self._apply_suggested_prices()
+        elif chosen == action_import_now:
+            self._run_import(dry_run=False)
+        elif chosen == action_set_import:
+            self._set_action_for_selected_rows("import")
+        elif chosen == action_set_create:
+            self._set_action_for_selected_rows("create")
+        elif chosen == action_set_skip:
+            self._set_action_for_selected_rows("skip")
+        elif chosen == action_delete_rows:
+            self._delete_selected_rows()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        table = getattr(self, "table", None)
+        table_viewport = table.viewport() if table is not None else None
+        if table is not None and (watched is table or watched is table_viewport):
+            if event.type() == QEvent.KeyPress and self.current_invoice is not None:
+                key = event.key()
+                if key in {Qt.Key_Delete, Qt.Key_Backspace} and (
+                    table.state() != QAbstractItemView.EditingState
+                ):
+                    self._delete_selected_rows()
+                    return True
+        return super().eventFilter(watched, event)
 
     def _apply_action_combo_visual(self, combo: QComboBox, action: str) -> None:
         state = action if action in {"import", "create", "skip"} else "import"
