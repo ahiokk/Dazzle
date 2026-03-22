@@ -1,6 +1,6 @@
 {
-  "version": "1.0.8",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.8/Dazzle-Setup-1.0.8.exe",
-  "sha256": "daa8d9fb2645edbd06d3196f6ce73bab06a55b7c27ce15a16281bd85c22b23d2",
-  "notes": "Исправлена наценка и кнопка \"Применить наценку\"."
+  "version": "1.0.9",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.9/Dazzle-Setup-1.0.9.exe",
+  "sha256": "a0042a67de50ffe2b867417bbe08fd77b0e3da5b29d1165cfe35b31b038482ee",
+  "notes": "Исправили ошибки."
 }

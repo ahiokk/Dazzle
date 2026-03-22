@@ -2455,7 +2455,6 @@ class MainWindow(QMainWindow):
                         COL_LINE,
                         COL_STATUS,
                         COL_METHOD,
-                        COL_SELL_PRICE_OLD,
                         COL_SELL_DIFF,
                         COL_MARKUP,
                         COL_SIMILAR,
@@ -2627,6 +2626,36 @@ class MainWindow(QMainWindow):
             )
             line.matched_product_code = target_code
             line.matched_name = target_name
+
+            # User can override sale price that will be written to DB
+            # via editable "Продажа в БД" column.
+            raw_sell_db = self._item_text(row, COL_SELL_PRICE_OLD).strip()
+            if raw_sell_db:
+                db_sell_default = (
+                    line.existing_sell_price
+                    if line.existing_sell_price is not None
+                    else (line.sell_price if line.sell_price is not None else line.price)
+                )
+                user_sell_db = self._parse_float_input(
+                    raw_sell_db,
+                    line_no=line.line_no,
+                    field_name="продажа в БД",
+                    strict=strict,
+                    default=db_sell_default,
+                )
+                line.sell_price = user_sell_db
+                line.raw_data["_sell_initialized"] = True
+                if line.matched_good_id is not None:
+                    if (
+                        line.existing_sell_price is None
+                        or abs(user_sell_db - line.existing_sell_price) > 0.0001
+                    ):
+                        line.raw_data["_force_update_sell_price"] = True
+                        line.raw_data["_price_applied"] = True
+                    else:
+                        line.raw_data.pop("_force_update_sell_price", None)
+                        line.raw_data.pop("_price_applied", None)
+
             self._refresh_line_price_state(line)
 
     def _on_action_changed(self, row: int, action: str) -> None:
