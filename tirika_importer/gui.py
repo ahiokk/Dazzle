@@ -8,45 +8,6 @@ import re
 import sys
 import traceback
 
-from PySide6.QtCore import QByteArray, QEvent, QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
-from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
-    QFileDialog,
-    QFrame,
-    QGridLayout,
-    QGroupBox,
-    QHeaderView,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMessageBox,
-    QMenu,
-    QPushButton,
-    QProgressDialog,
-    QPlainTextEdit,
-    QSplitter,
-    QStyle,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
-    QTableWidget,
-    QTableWidgetItem,
-    QTabWidget,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-)
-
 from .app_settings import AppSettings, load_app_settings, save_app_settings
 from .config import load_config
 from .db import (
@@ -60,6 +21,56 @@ from .db import (
 from .matcher import GoodsMatcher
 from .models import ImportOptions, ImportResult, InvoiceLine, MatchCandidate, ParsedInvoice
 from .parsers import InvoiceParseError, parse_invoice_file
+from .qt_compat import (
+    QAbstractItemView,
+    QApplication,
+    QByteArray,
+    QCheckBox,
+    QColor,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QEvent,
+    QFileDialog,
+    QFontMetrics,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHeaderView,
+    QHBoxLayout,
+    QIcon,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QObject,
+    QPainter,
+    QPalette,
+    QPen,
+    QPixmap,
+    QPlainTextEdit,
+    QProgressDialog,
+    QPushButton,
+    QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QSvgWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QThread,
+    QTimer,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+    Qt,
+    Signal,
+)
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
 from .version import APP_NAME, APP_VERSION

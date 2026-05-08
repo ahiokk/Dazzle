@@ -94,6 +94,7 @@ class GoodsMatcher:
     def match_lines(self, lines: list[InvoiceLine]) -> None:
         for line in lines:
             self.match_line(line)
+            self._apply_forced_skip_markers(line)
 
     def match_line(self, line: InvoiceLine) -> None:
         line.raw_data.pop("_sell_initialized", None)
@@ -183,6 +184,16 @@ class GoodsMatcher:
         line.matched_tax_mode = 0
         line.action = "create"
         line.warning = "Товар не найден автоматически."
+
+    @staticmethod
+    def _apply_forced_skip_markers(line: InvoiceLine) -> None:
+        if not bool(line.raw_data.get("_cancelled_in_invoice", False)):
+            return
+        forced_warning = str(line.raw_data.get("_cancelled_warning", "") or "").strip()
+        if not forced_warning:
+            forced_warning = "Товар отменен"
+        line.action = "skip"
+        line.warning = forced_warning
 
     def search_goods(self, query: str, limit: int = 200) -> list[MatchCandidate]:
         q_raw = query.strip()

@@ -6,9 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-from PySide6.QtWidgets import QApplication
-
 from tirika_importer.gui import MainWindow
+from tirika_importer.qt_compat import QApplication
 
 
 def _is_windows_admin() -> bool:

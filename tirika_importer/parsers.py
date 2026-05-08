@@ -14,6 +14,14 @@ import pandas as pd
 from .models import InvoiceLine, ParsedInvoice
 
 NOTE_COLUMN_NEEDLES = ["примеч", "прим.", "коммент", "note", "remark"]
+CANCEL_NOTE_PATTERNS = (
+    r"\bотмен\w*",
+    r"\bотказ\w*",
+    r"\bcancel(?:led|ed)?\b",
+    r"\bannul\w*",
+    r"\bне\s*прид\w*",
+    r"\bне\s*будет\b",
+)
 
 try:
     import win32com.client  # type: ignore[import-not-found]
@@ -95,7 +103,8 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
 
         qty = _to_float(row.iloc[qty_col])
         price = _to_float(row.iloc[price_col])
-        total = _to_float(row.iloc[sum_col]) if sum_col is not None else round(qty * price, 2)
+        raw_total_value = row.iloc[sum_col] if sum_col is not None else None
+        total = _to_float(raw_total_value) if sum_col is not None else round(qty * price, 2)
 
         line = InvoiceLine(
             line_no=len(lines) + 1,
@@ -108,6 +117,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
             source_supplier="МИКАДО",
             raw_data={k: _clean_text(v) for k, v in row.to_dict().items()},
         )
+        _mark_line_cancelled_if_needed(line, raw_total_value=raw_total_value)
         lines.append(line)
 
     if not lines:
@@ -157,8 +167,9 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
 
         qty = _to_float(row[qty_col]) if qty_col < len(row) else 0.0
         price = _to_float(row[price_col]) if price_col < len(row) else 0.0
+        raw_total_value = row[sum_col] if sum_col is not None and sum_col < len(row) else None
         total = (
-            _to_float(row[sum_col])
+            _to_float(raw_total_value)
             if sum_col is not None and sum_col < len(row)
             else round(qty * price, 2)
         )
@@ -184,6 +195,7 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
             warning=warning,
             raw_data={"status": status, "note": note},
         )
+        _mark_line_cancelled_if_needed(line, raw_total_value=raw_total_value)
         lines.append(line)
 
     if not lines:
@@ -241,8 +253,9 @@ def _parse_forum_paid_excel(path: Path) -> ParsedInvoice:
             [qty_ship_col, qty_booked_col, qty_ordered_col],
         )
         price = _to_float(_row_value(row, price_col))
+        raw_total_value = _row_value(row, sum_col)
         total = (
-            _to_float(_row_value(row, sum_col))
+            _to_float(raw_total_value)
             if sum_col is not None
             else round(qty * price, 2)
         )
@@ -268,6 +281,7 @@ def _parse_forum_paid_excel(path: Path) -> ParsedInvoice:
             warning=warning,
             raw_data=raw_data,
         )
+        _mark_line_cancelled_if_needed(line, raw_total_value=raw_total_value)
         lines.append(line)
 
     if not lines:
@@ -316,8 +330,9 @@ def _parse_moskvorechie_excel(path: Path) -> ParsedInvoice:
 
         qty = _to_float(_row_value(row, qty_col))
         price = _to_float(_row_value(row, price_col))
+        raw_total_value = _row_value(row, sum_col)
         total = (
-            _to_float(_row_value(row, sum_col))
+            _to_float(raw_total_value)
             if sum_col is not None
             else round(qty * price, 2)
         )
@@ -347,6 +362,7 @@ def _parse_moskvorechie_excel(path: Path) -> ParsedInvoice:
             warning=warning,
             raw_data={"status": status, "note": note},
         )
+        _mark_line_cancelled_if_needed(line, raw_total_value=raw_total_value)
         lines.append(line)
 
     if not lines:
@@ -552,6 +568,43 @@ def _extract_note_from_row(row: list[Any], note_cols: list[int]) -> str:
     # Keep source column order, avoid duplicate repeated values.
     unique_notes = list(dict.fromkeys(notes))
     return " | ".join(unique_notes)
+
+
+def _mark_line_cancelled_if_needed(line: InvoiceLine, *, raw_total_value: Any) -> None:
+    note_text = _clean_text(line.note)
+    note_cancelled = _is_cancel_note(note_text)
+    total_cancelled = _is_cancel_total_marker(raw_total_value) or line.total < 0
+    if not note_cancelled and not total_cancelled:
+        return
+
+    warning = "Товар отменен"
+
+    line.action = "skip"
+    line.raw_data["_cancelled_in_invoice"] = True
+    line.raw_data["_cancelled_warning"] = warning
+    line.warning = warning
+
+
+def _is_cancel_note(note: str) -> bool:
+    if not note:
+        return False
+    low = note.lower().replace("ё", "е").strip()
+    if re.fullmatch(r"[*\s\-_./\\]*no[*\s\-_./\\]*", low, flags=re.IGNORECASE):
+        return True
+    return any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in CANCEL_NOTE_PATTERNS)
+
+
+def _is_cancel_total_marker(value: Any) -> bool:
+    text = _clean_text(value)
+    if not text:
+        return False
+    compact = text.replace(" ", "").replace(",", ".")
+    compact = compact.replace("−", "-").replace("–", "-").replace("—", "-")
+    if compact in {"-"}:
+        return True
+    if compact.startswith("-"):
+        return compact not in {"-0", "-0.0", "-0.00"}
+    return False
 
 
 def _row_has_total_marker(row: list[Any]) -> bool:
