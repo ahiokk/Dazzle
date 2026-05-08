@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import tempfile
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -25,7 +27,7 @@ class UpdateInfo:
     release_page_url: str = ""
 
 
-def check_for_update(current_version: str, manifest_url: str, timeout_sec: float = 7.0) -> UpdateInfo | None:
+def check_for_update(current_version: str, manifest_url: str, timeout_sec: float = 20.0) -> UpdateInfo | None:
     url = manifest_url.strip()
     if not url:
         return None
@@ -52,7 +54,7 @@ def check_for_update(current_version: str, manifest_url: str, timeout_sec: float
 def download_installer(
     update: UpdateInfo,
     target_dir: Path,
-    timeout_sec: float = 45.0,
+    timeout_sec: float = 90.0,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -60,26 +62,35 @@ def download_installer(
     final_path = target_dir / name
     temp_path = target_dir / f"{name}.part"
 
-    req = Request(update.installer_url, headers={"User-Agent": "Dazzle-Updater/1.0"})
-    try:
-        with urlopen(req, timeout=timeout_sec) as resp, temp_path.open("wb") as out:
-            total_raw = resp.headers.get("Content-Length", "").strip()
-            total_bytes = int(total_raw) if total_raw.isdigit() else 0
-            downloaded = 0
-            if progress_cb is not None:
-                progress_cb(0, total_bytes)
-            while True:
-                chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        req = Request(update.installer_url, headers={"User-Agent": "Dazzle-Updater/1.0"})
+        try:
+            with urlopen(req, timeout=timeout_sec) as resp, temp_path.open("wb") as out:
+                total_raw = resp.headers.get("Content-Length", "").strip()
+                total_bytes = int(total_raw) if total_raw.isdigit() else 0
+                downloaded = 0
                 if progress_cb is not None:
-                    progress_cb(downloaded, total_bytes)
-    except Exception as exc:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
-        raise UpdateError(f"Не удалось скачать обновление: {exc}") from exc
+                    progress_cb(0, total_bytes)
+                while True:
+                    chunk = resp.read(1024 * 256)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb is not None:
+                        progress_cb(downloaded, total_bytes)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            if attempt < 3:
+                time.sleep(1.2 * attempt)
+                continue
+    if last_exc is not None:
+        raise UpdateError(f"Не удалось скачать обновление: {last_exc}") from last_exc
 
     if update.sha256:
         actual = sha256_file(temp_path)
@@ -147,21 +158,80 @@ def _installer_filename(update: UpdateInfo) -> str:
 
 
 def _fetch_manifest(manifest_url: str, timeout_sec: float) -> dict[str, object]:
-    req = Request(manifest_url, headers={"User-Agent": "Dazzle-Updater/1.0"})
-    try:
-        with urlopen(req, timeout=timeout_sec) as resp:
-            payload = resp.read().decode("utf-8")
-    except Exception as exc:
-        raise UpdateError(f"Не удалось получить manifest обновлений: {exc}") from exc
+    urls = _manifest_candidate_urls(manifest_url)
+    last_exc: Exception | None = None
+    for url in urls:
+        for attempt in range(1, 4):
+            req = Request(url, headers={"User-Agent": "Dazzle-Updater/1.0"})
+            try:
+                with urlopen(req, timeout=timeout_sec) as resp:
+                    payload = resp.read().decode("utf-8")
+                raw = _parse_manifest_payload(payload)
+                if not isinstance(raw, dict):
+                    raise UpdateError("Manifest должен быть JSON-объектом.")
+                return raw
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 3:
+                    time.sleep(0.8 * attempt)
+                    continue
+    raise UpdateError(f"Не удалось получить manifest обновлений: {last_exc}") from last_exc
 
+
+def _parse_manifest_payload(payload: str) -> dict[str, object]:
     try:
         raw = json.loads(payload)
     except Exception as exc:
         raise UpdateError(f"Manifest обновлений не является валидным JSON: {exc}") from exc
 
+    # GitHub Contents API response format:
+    # { "content": "<base64>", "encoding": "base64", ... }
+    if isinstance(raw, dict) and "content" in raw and "encoding" in raw and "version" not in raw:
+        try:
+            encoded = str(raw.get("content", "") or "")
+            decoded = base64.b64decode(encoded, validate=False).decode("utf-8")
+            raw = json.loads(decoded)
+        except Exception as exc:
+            raise UpdateError(f"Не удалось разобрать manifest из GitHub API: {exc}") from exc
+
     if not isinstance(raw, dict):
         raise UpdateError("Manifest должен быть JSON-объектом.")
     return raw
+
+
+def _manifest_candidate_urls(manifest_url: str) -> list[str]:
+    url = manifest_url.strip()
+    if not url:
+        return []
+
+    out: list[str] = []
+
+    def add(candidate: str) -> None:
+        c = candidate.strip()
+        if c and c not in out:
+            out.append(c)
+
+    add(url)
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path.strip("/")
+
+    if host == "raw.githubusercontent.com":
+        parts = path.split("/", 3)
+        if len(parts) == 4:
+            owner, repo, ref, rel_path = parts
+            add(f"https://api.github.com/repos/{owner}/{repo}/contents/{rel_path}?ref={ref}")
+            add(f"https://github.com/{owner}/{repo}/raw/{ref}/{rel_path}")
+    elif host == "github.com":
+        parts = path.split("/")
+        if len(parts) >= 5:
+            owner, repo, marker, ref = parts[0], parts[1], parts[2], parts[3]
+            rel_path = "/".join(parts[4:])
+            if marker in {"raw", "blob"}:
+                add(f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{rel_path}")
+                add(f"https://api.github.com/repos/{owner}/{repo}/contents/{rel_path}?ref={ref}")
+
+    return out
 
 
 def _installer_args(installer_path: Path) -> list[str]:

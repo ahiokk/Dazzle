@@ -5,6 +5,14 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+DEFAULT_UPDATE_MANIFEST_URL = (
+    "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest.json?ref=main"
+)
+LEGACY_UPDATE_MANIFEST_URLS = {
+    "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest.json",
+    "https://github.com/ahiokk/Dazzle/raw/main/updates/latest.json",
+}
+
 
 @dataclass
 class AppSettings:
@@ -31,7 +39,7 @@ class AppSettings:
     prefix_new_goods_with_order: bool = True
     table_layout_version: int = 2
     table_header_state: str = ""
-    update_manifest_url: str = "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest.json"
+    update_manifest_url: str = DEFAULT_UPDATE_MANIFEST_URL
     auto_check_updates: bool = True
     ignored_update_version: str = ""
 
@@ -127,9 +135,11 @@ def load_app_settings() -> AppSettings:
         ),
         table_layout_version=layout_version,
         table_header_state=table_header_state,
-        update_manifest_url=_to_nonempty_str(
-            raw.get("update_manifest_url"),
-            defaults.update_manifest_url,
+        update_manifest_url=_normalize_update_manifest_url(
+            _to_nonempty_str(
+                raw.get("update_manifest_url"),
+                defaults.update_manifest_url,
+            )
         ),
         auto_check_updates=_to_bool(raw.get("auto_check_updates"), defaults.auto_check_updates),
         ignored_update_version=str(raw.get("ignored_update_version", defaults.ignored_update_version) or ""),
@@ -177,6 +187,15 @@ def _to_nonempty_str(value: object, default: str) -> str:
     if text:
         return text
     return str(default or "")
+
+
+def _normalize_update_manifest_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return DEFAULT_UPDATE_MANIFEST_URL
+    if value in LEGACY_UPDATE_MANIFEST_URLS:
+        return DEFAULT_UPDATE_MANIFEST_URL
+    return value
 
 
 def _migrate_payment_type_from_legacy(value: int) -> int:
