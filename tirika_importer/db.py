@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import errno
 import math
@@ -24,7 +24,7 @@ class ImportValidationError(TirikaDBError):
     pass
 
 
-@dataclass(slots=True)
+@dataclass
 class GoodRecord:
     good_id: int
     product_code: str
@@ -898,3 +898,4 @@ def calculate_suggested_sell_price(
     base = max(0.0, float(buy_price))
     marked = base * (1.0 + (markup_percent / 100.0))
     return round_up_to_step(marked, round_step)
+

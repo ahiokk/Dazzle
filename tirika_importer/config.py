@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
 
-@dataclass(slots=True)
+@dataclass
 class AppConfig:
     env_path: Path
     db_dir: Path | None
@@ -35,3 +35,4 @@ def load_config(env_path: Path | None = None) -> AppConfig:
             if parsed:
                 db_dir = Path(parsed)
     return AppConfig(env_path=env, db_dir=db_dir)
+

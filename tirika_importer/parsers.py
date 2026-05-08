@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import contextlib
@@ -33,7 +33,7 @@ class InvoiceParseError(RuntimeError):
     pass
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedTable:
     headers: list[str]
     rows: list[list[Any]]
@@ -704,3 +704,4 @@ def _normalize_article(value: str, *, source_type: str = "") -> str:
     text = text.replace("\t", "")
     text = re.sub(r"[\s\-]+", "", text)
     return text.upper()
+

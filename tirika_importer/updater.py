@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -16,7 +16,7 @@ class UpdateError(RuntimeError):
     pass
 
 
-@dataclass(slots=True)
+@dataclass
 class UpdateInfo:
     version: str
     installer_url: str
@@ -200,3 +200,4 @@ def _run_installer_with_relaunch(installer_args: list[str], relaunch_executable:
         ["cmd.exe", "/c", str(script_path)],
         creationflags=creation_flags,
     )
+

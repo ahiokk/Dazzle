@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from collections import defaultdict
@@ -9,7 +9,7 @@ from .db import GoodRecord
 from .models import InvoiceLine, MatchCandidate
 
 
-@dataclass(slots=True)
+@dataclass
 class _IndexEntry:
     good_id: int
     source: str
@@ -455,3 +455,4 @@ def _format_similar_articles(candidates: list[MatchCandidate], limit: int = 5) -
         code = cand.product_code.strip() or "без кода"
         parts.append(f"{code} [{cand.good_id}]")
     return ", ".join(parts)
+

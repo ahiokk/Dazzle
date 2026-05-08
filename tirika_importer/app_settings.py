@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-@dataclass(slots=True)
+@dataclass
 class AppSettings:
     db_path: str = ""
     invoices_dir: str = ""
@@ -188,3 +188,4 @@ def _migrate_payment_type_from_legacy(value: int) -> int:
     if value == 1:
         return 0
     return value
+

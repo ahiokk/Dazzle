@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class MatchCandidate:
     good_id: int
     product_code: str
@@ -19,7 +19,7 @@ class MatchCandidate:
     score: float
 
 
-@dataclass(slots=True)
+@dataclass
 class InvoiceLine:
     line_no: int
     article: str
@@ -50,7 +50,7 @@ class InvoiceLine:
     candidates: list[MatchCandidate] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedInvoice:
     file_path: Path
     supplier_hint: str
@@ -61,7 +61,7 @@ class ParsedInvoice:
     currency: str = "RUB"
 
 
-@dataclass(slots=True)
+@dataclass
 class ImportOptions:
     supplier_id: int
     user_id: int
@@ -82,7 +82,7 @@ class ImportOptions:
     waybill_date: datetime | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class ImportResult:
     success: bool
     dry_run: bool
@@ -93,3 +93,4 @@ class ImportResult:
     created_goods: int
     total_cost: float
     warnings: list[str] = field(default_factory=list)
+
