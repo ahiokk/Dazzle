@@ -441,6 +441,59 @@ class UpdateDownloadWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class DbOpenWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, db_path: Path, shop_id: int) -> None:
+        super().__init__()
+        self._db_path = Path(db_path)
+        self._shop_id = int(shop_id)
+
+    def run(self) -> None:
+        try:
+            db = TirikaDB(self._db_path)
+            suppliers = db.list_suppliers()
+            users = db.list_users()
+            shops = db.list_shops()
+            shop_ids = {int(sid) for sid, _ in shops}
+            if self._shop_id in shop_ids:
+                effective_shop_id = self._shop_id
+            elif shops:
+                effective_shop_id = int(shops[0][0])
+            else:
+                effective_shop_id = 0
+            catalog = db.load_goods_catalog(shop_id=effective_shop_id)
+            self.finished.emit(
+                {
+                    "db_path": str(self._db_path),
+                    "suppliers": suppliers,
+                    "users": users,
+                    "shops": shops,
+                    "shop_id": effective_shop_id,
+                    "catalog": catalog,
+                }
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class InvoiceLoadWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, invoice_path: Path) -> None:
+        super().__init__()
+        self._invoice_path = Path(invoice_path)
+
+    def run(self) -> None:
+        try:
+            invoice = parse_invoice_file(self._invoice_path)
+            self.finished.emit(invoice)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class SellDbPriceDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         old_price = str(index.data(ROLE_SELL_DB_OLD_PRICE) or "").strip()
@@ -1360,10 +1413,16 @@ class MainWindow(QMainWindow):
         self._update_download_worker: UpdateDownloadWorker | None = None
         self._update_progress_dialog: QProgressDialog | None = None
         self._pending_update_info: UpdateInfo | None = None
+        self._db_open_thread: QThread | None = None
+        self._db_open_worker: DbOpenWorker | None = None
+        self._invoice_load_thread: QThread | None = None
+        self._invoice_load_worker: InvoiceLoadWorker | None = None
+        self._ui_busy_counter = 0
 
         self._build_ui()
         self._apply_styles()
-        self._load_initial_config()
+        self._set_ui_busy(True, "Инициализация...")
+        QTimer.singleShot(0, self._load_initial_config)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -1678,14 +1737,52 @@ class MainWindow(QMainWindow):
         self._apply_settings_to_runtime_controls()
         self._refresh_invoice_files()
         if self.app_settings.db_path.strip():
+            self._set_ui_busy(False)
             self._open_db()
         else:
             self._log("Укажите путь к базе в настройках и загрузите накладную.")
+            self._set_ui_busy(False)
         if self.app_settings.auto_check_updates:
             QTimer.singleShot(1200, lambda: self._check_for_updates(interactive=False))
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(APP_STYLESHEET)
+
+    def _is_ui_busy(self) -> bool:
+        return self._ui_busy_counter > 0
+
+    def _set_ui_busy(self, busy: bool, message: str = "") -> None:
+        if busy:
+            self._ui_busy_counter += 1
+            if self._ui_busy_counter == 1:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                if message:
+                    self._log(message)
+        else:
+            self._ui_busy_counter = max(0, self._ui_busy_counter - 1)
+            if self._ui_busy_counter == 0:
+                QApplication.restoreOverrideCursor()
+
+        ui_enabled = not self._is_ui_busy()
+        for widget in (
+            getattr(self, "settings_btn", None),
+            getattr(self, "debug_toggle_btn", None),
+            getattr(self, "invoice_refresh_btn", None),
+            getattr(self, "load_invoice_btn", None),
+            getattr(self, "invoice_file_combo", None),
+            getattr(self, "supplier_combo", None),
+            getattr(self, "payment_combo", None),
+            getattr(self, "pick_btn", None),
+            getattr(self, "apply_suggested_price_btn", None),
+            getattr(self, "undo_btn", None),
+            getattr(self, "redo_btn", None),
+            getattr(self, "import_btn", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(ui_enabled)
+
+        if hasattr(self, "table") and self.table is not None:
+            self.table.setEnabled(ui_enabled)
 
     def _set_debug_log_enabled(self, enabled: bool) -> None:
         self.debug_log_enabled = bool(enabled)
@@ -2129,6 +2226,8 @@ class MainWindow(QMainWindow):
             self.invoice_file_combo.addItem(file.name, userData=str(file))
 
     def _open_settings_dialog(self) -> None:
+        if self._is_ui_busy():
+            return
         users = self._combo_id_name_pairs(self.user_combo)
         shops = self._combo_id_name_pairs(self.shop_combo)
         previous_db_path = self.app_settings.db_path.strip()
@@ -2162,11 +2261,14 @@ class MainWindow(QMainWindow):
                 self._run_matching()
 
     def _open_db(self) -> None:
+        if self._db_open_thread is not None and self._db_open_thread.isRunning():
+            return
         raw = self.app_settings.db_path.strip()
         if not raw:
             self.db_state_label.setText("БД: не указана")
             self.db_state_label.setToolTip("")
             self._error("Укажите путь к shop.db в настройках.")
+            self._set_ui_busy(False)
             return
 
         db_path = Path(raw)
@@ -2175,20 +2277,21 @@ class MainWindow(QMainWindow):
             self.app_settings.db_path = str(db_path)
             self._save_settings(silent=True)
 
-        try:
-            self.db = TirikaDB(db_path)
-            self._load_reference_data()
-            self._log(f"База открыта: {db_path}")
-            self.db_state_label.setText("БД: подключена")
-            self.db_state_label.setToolTip(str(db_path))
-            if self.current_invoice is not None:
-                self._run_matching()
-        except Exception as exc:
-            self.db = None
-            self.matcher = None
-            self.db_state_label.setText("БД: ошибка подключения")
-            self.db_state_label.setToolTip("")
-            self._error("Ошибка открытия базы", exc=exc)
+        self._set_ui_busy(True, "Подключение к базе...")
+        self._db_open_thread = QThread(self)
+        self._db_open_worker = DbOpenWorker(
+            db_path=db_path,
+            shop_id=int(self.app_settings.shop_id),
+        )
+        self._db_open_worker.moveToThread(self._db_open_thread)
+
+        self._db_open_thread.started.connect(self._db_open_worker.run)
+        self._db_open_worker.finished.connect(self._on_db_open_finished)
+        self._db_open_worker.failed.connect(self._on_db_open_failed)
+        self._db_open_worker.finished.connect(self._db_open_thread.quit)
+        self._db_open_worker.failed.connect(self._db_open_thread.quit)
+        self._db_open_thread.finished.connect(self._cleanup_db_open_worker)
+        self._db_open_thread.start()
 
     def _load_reference_data(self) -> None:
         if self.db is None:
@@ -2197,7 +2300,15 @@ class MainWindow(QMainWindow):
         suppliers = self.db.list_suppliers()
         users = self.db.list_users()
         shops = self.db.list_shops()
+        self._apply_reference_data(suppliers, users, shops)
+        self._reload_catalog()
 
+    def _apply_reference_data(
+        self,
+        suppliers: list[tuple[int, str]],
+        users: list[tuple[int, str]],
+        shops: list[tuple[int, str]],
+    ) -> None:
         self.supplier_combo.clear()
         for supplier_id, name in suppliers:
             self.supplier_combo.addItem(f"{name} [{supplier_id}]", userData=supplier_id)
@@ -2219,15 +2330,68 @@ class MainWindow(QMainWindow):
             self.shop_combo.addItem(f"{name} [{shop_id}]", userData=shop_id)
         self.shop_combo.blockSignals(False)
         self._apply_settings_to_runtime_controls()
-        self._reload_catalog()
+
+    def _on_db_open_finished(self, payload: object) -> None:
+        try:
+            data = payload if isinstance(payload, dict) else {}
+            raw_path = str(data.get("db_path", "") or "").strip()
+            suppliers = list(data.get("suppliers", []) or [])
+            users = list(data.get("users", []) or [])
+            shops = list(data.get("shops", []) or [])
+            catalog = dict(data.get("catalog", {}) or {})
+            effective_shop_id = int(data.get("shop_id", self.app_settings.shop_id))
+
+            if raw_path:
+                self.app_settings.db_path = raw_path
+            self.db = TirikaDB(Path(self.app_settings.db_path))
+            self.app_settings.shop_id = effective_shop_id
+            self._apply_reference_data(suppliers, users, shops)
+            self.matcher = GoodsMatcher(catalog)
+            self._save_settings(silent=True)
+
+            self._log(f"База открыта: {self.app_settings.db_path}")
+            self._log(f"Каталог загружен: {len(catalog)} товаров.")
+            self.db_state_label.setText("БД: подключена")
+            self.db_state_label.setToolTip(self.app_settings.db_path)
+
+            if self.current_invoice is not None:
+                self._run_matching()
+        except Exception as exc:
+            self.db = None
+            self.matcher = None
+            self.db_state_label.setText("БД: ошибка подключения")
+            self.db_state_label.setToolTip("")
+            self._error("Ошибка открытия базы", exc=exc)
+        finally:
+            self._set_ui_busy(False)
+
+    def _on_db_open_failed(self, message: str) -> None:
+        self.db = None
+        self.matcher = None
+        self.db_state_label.setText("БД: ошибка подключения")
+        self.db_state_label.setToolTip("")
+        self._error(f"Ошибка открытия базы: {message}")
+        self._set_ui_busy(False)
+
+    def _cleanup_db_open_worker(self) -> None:
+        if self._db_open_worker is not None:
+            self._db_open_worker.deleteLater()
+            self._db_open_worker = None
+        if self._db_open_thread is not None:
+            self._db_open_thread.deleteLater()
+            self._db_open_thread = None
 
     def _reload_catalog(self) -> None:
         if self.db is None:
             return
-        shop_id = self._selected_data(self.shop_combo, 0)
-        catalog = self.db.load_goods_catalog(shop_id=shop_id)
-        self.matcher = GoodsMatcher(catalog)
-        self._log(f"Каталог загружен: {len(catalog)} товаров.")
+        self._set_ui_busy(True, "Обновление каталога...")
+        try:
+            shop_id = self._selected_data(self.shop_combo, 0)
+            catalog = self.db.load_goods_catalog(shop_id=shop_id)
+            self.matcher = GoodsMatcher(catalog)
+            self._log(f"Каталог загружен: {len(catalog)} товаров.")
+        finally:
+            self._set_ui_busy(False)
 
     def _on_shop_changed(self) -> None:
         self.app_settings.shop_id = self._selected_data(self.shop_combo, self.app_settings.shop_id)
@@ -2239,14 +2403,36 @@ class MainWindow(QMainWindow):
             self._run_matching()
 
     def _load_invoice(self) -> None:
+        if self._is_ui_busy():
+            return
+        if self._invoice_load_thread is not None and self._invoice_load_thread.isRunning():
+            return
         raw = str(self.invoice_file_combo.currentData() or "").strip()
         if not raw:
             self._error("Выберите накладную из списка.")
             return
 
+        invoice_path = Path(raw)
+        self._set_ui_busy(True, f"Загрузка накладной: {invoice_path.name}...")
+        self._invoice_load_thread = QThread(self)
+        self._invoice_load_worker = InvoiceLoadWorker(invoice_path=invoice_path)
+        self._invoice_load_worker.moveToThread(self._invoice_load_thread)
+
+        self._invoice_load_thread.started.connect(self._invoice_load_worker.run)
+        self._invoice_load_worker.finished.connect(self._on_invoice_loaded)
+        self._invoice_load_worker.failed.connect(self._on_invoice_load_failed)
+        self._invoice_load_worker.finished.connect(self._invoice_load_thread.quit)
+        self._invoice_load_worker.failed.connect(self._invoice_load_thread.quit)
+        self._invoice_load_thread.finished.connect(self._cleanup_invoice_load_worker)
+        self._invoice_load_thread.start()
+
+    def _on_invoice_loaded(self, payload: object) -> None:
         try:
+            if not isinstance(payload, ParsedInvoice):
+                raise InvoiceParseError("Некорректный формат данных после чтения накладной.")
+
+            invoice = payload
             self._reset_history()
-            invoice = parse_invoice_file(Path(raw))
             self.current_invoice = invoice
             self._select_supplier_by_hint(invoice.supplier_hint)
             self._populate_table(invoice.lines)
@@ -2261,6 +2447,20 @@ class MainWindow(QMainWindow):
             self._error(str(exc), exc=exc)
         except Exception as exc:
             self._error("Ошибка чтения накладной", exc=exc)
+        finally:
+            self._set_ui_busy(False)
+
+    def _on_invoice_load_failed(self, message: str) -> None:
+        self._error(f"Ошибка чтения накладной: {message}")
+        self._set_ui_busy(False)
+
+    def _cleanup_invoice_load_worker(self) -> None:
+        if self._invoice_load_worker is not None:
+            self._invoice_load_worker.deleteLater()
+            self._invoice_load_worker = None
+        if self._invoice_load_thread is not None:
+            self._invoice_load_thread.deleteLater()
+            self._invoice_load_thread = None
 
     def _run_matching(self, *, record_history: bool = True) -> None:
         if self.current_invoice is None:
@@ -2564,6 +2764,14 @@ class MainWindow(QMainWindow):
                         item = self.table.item(row, col)
                         if item is not None:
                             item.setBackground(QColor(221, 236, 255))
+
+                if bool(line.raw_data.get("_cancelled_in_invoice", False)):
+                    note_item = self.table.item(row, COL_NOTE)
+                    if note_item is not None:
+                        font = note_item.font()
+                        font.setBold(True)
+                        note_item.setFont(font)
+                        note_item.setForeground(QColor(190, 18, 18))
 
                 if line.raw_data.get("_manual_edited", False):
                     for col in (COL_ARTICLE, COL_NAME, COL_NOTE, COL_QTY, COL_BUY_PRICE, COL_SUM):
