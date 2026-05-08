@@ -42,6 +42,7 @@ class GoodRecord:
 class TirikaDB:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        self._table_columns_cache: dict[str, set[str]] = {}
         if not self.db_path.exists():
             raise TirikaDBError(f"Файл базы не найден: {self.db_path}")
 
@@ -111,11 +112,35 @@ class TirikaDB:
     def load_goods_catalog(self, shop_id: int) -> dict[int, GoodRecord]:
         catalog: dict[int, GoodRecord] = {}
         with self._connect() as conn:
+            cur = conn.cursor()
+            goods_cols = self._table_columns(cur, "goods")
+
+            product_code_expr = self._qi("product_code") if "product_code" in goods_cols else "''"
+            name_expr = self._qi("name") if "name" in goods_cols else "''"
+            manufacturer_expr = self._qi("manufacturer") if "manufacturer" in goods_cols else "''"
+            buy_price_expr = self._qi("buy_price") if "buy_price" in goods_cols else "0"
+            sell_price_expr = self._qi("price") if "price" in goods_cols else "0"
+            tax_mode_expr = self._qi("tax_mode") if "tax_mode" in goods_cols else "0"
+            supplier_expr = self._qi("supplier_id") if "supplier_id" in goods_cols else "0"
+            where_expr = (
+                f"COALESCE({self._qi('is_deleted')}, 0) = 0"
+                if "is_deleted" in goods_cols
+                else "1 = 1"
+            )
+
             good_rows = conn.execute(
-                """
-                SELECT id, product_code, name, manufacturer, buy_price, price, tax_mode, supplier_id
-                FROM goods
-                WHERE is_deleted = 0
+                f"""
+                SELECT
+                    {self._qi("id")},
+                    {product_code_expr},
+                    {name_expr},
+                    {manufacturer_expr},
+                    {buy_price_expr},
+                    {sell_price_expr},
+                    {tax_mode_expr},
+                    {supplier_expr}
+                FROM {self._qi("goods")}
+                WHERE {where_expr}
                 """
             ).fetchall()
             for row in good_rows:
@@ -131,34 +156,45 @@ class TirikaDB:
                     supplier_id=int(row[7] or 0),
                 )
 
-            remainder_rows = conn.execute(
-                """
-                SELECT good_id, remainder
-                FROM remainders
-                WHERE shop_id = ?
-                """,
-                (shop_id,),
-            ).fetchall()
-            for row in remainder_rows:
-                gid = int(row[0])
-                if gid in catalog:
-                    catalog[gid].remainder = float(row[1] or 0.0)
+            remainder_cols = self._table_columns(cur, "remainders")
+            if {"good_id", "shop_id"} <= remainder_cols:
+                remainder_col = "remainder" if "remainder" in remainder_cols else "0"
+                remainder_rows = conn.execute(
+                    f"""
+                    SELECT {self._qi("good_id")}, {self._qi(remainder_col) if remainder_col != "0" else "0"}
+                    FROM {self._qi("remainders")}
+                    WHERE {self._qi("shop_id")} = ?
+                    """,
+                    (shop_id,),
+                ).fetchall()
+                for row in remainder_rows:
+                    gid = int(row[0])
+                    if gid in catalog:
+                        catalog[gid].remainder = float(row[1] or 0.0)
 
-            cross_rows = conn.execute("SELECT good_id, cross_code FROM cross_codes").fetchall()
-            for row in cross_rows:
-                gid = int(row[0])
-                if gid in catalog:
-                    val = decode_db_text(row[1]).strip()
-                    if val:
-                        catalog[gid].cross_codes.append(val)
+            cross_cols = self._table_columns(cur, "cross_codes")
+            if {"good_id", "cross_code"} <= cross_cols:
+                cross_rows = conn.execute(
+                    f"SELECT {self._qi('good_id')}, {self._qi('cross_code')} FROM {self._qi('cross_codes')}"
+                ).fetchall()
+                for row in cross_rows:
+                    gid = int(row[0])
+                    if gid in catalog:
+                        val = decode_db_text(row[1]).strip()
+                        if val:
+                            catalog[gid].cross_codes.append(val)
 
-            barcode_rows = conn.execute("SELECT good_id, barcode FROM barcodes").fetchall()
-            for row in barcode_rows:
-                gid = int(row[0])
-                if gid in catalog:
-                    val = decode_db_text(row[1]).strip()
-                    if val:
-                        catalog[gid].barcodes.append(val)
+            barcode_cols = self._table_columns(cur, "barcodes")
+            if {"good_id", "barcode"} <= barcode_cols:
+                barcode_rows = conn.execute(
+                    f"SELECT {self._qi('good_id')}, {self._qi('barcode')} FROM {self._qi('barcodes')}"
+                ).fetchall()
+                for row in barcode_rows:
+                    gid = int(row[0])
+                    if gid in catalog:
+                        val = decode_db_text(row[1]).strip()
+                        if val:
+                            catalog[gid].barcodes.append(val)
 
         return catalog
 
@@ -284,64 +320,71 @@ class TirikaDB:
             display_string = self._build_display_string(item_rows)
             waybill_number = invoice.invoice_number.strip()[:20]
 
-            cur.execute(
-                """
-                INSERT INTO waybills (
-                    id, is_deleted, is_replicated, shop_id, waybill_date, record_type, payment_type,
-                    is_reserve, reserve_until, contractor_id, user_id, waybill_number,
-                    cost, paid, display_string, comment, customer_balls, referer_balls,
-                    currency_id, is_archived, discount_id, discount, is_published,
-                    foreign_id, flags, repair_status, customer_balls_spent, referer_balls_spent
-                )
-                VALUES (
-                    ?, 0, 0, ?, ?, ?, ?, 0, 0, ?, ?, CAST(? AS TEXT),
-                    ?, ?, CAST(? AS TEXT), CAST(? AS TEXT), 0, 0,
-                    0, 0, -1, 0, 0, -1, 0, -1, 0, 0
-                )
-                """,
-                (
-                    waybill_id,
-                    options.shop_id,
-                    waybill_ts,
-                    PURCHASE_WAYBILL_RECORD_TYPE,
-                    options.payment_type,
-                    options.supplier_id,
-                    options.user_id,
-                    encode_db_text(waybill_number),
-                    total_cost,
-                    paid,
-                    encode_db_text(display_string),
-                    encode_db_text(""),
-                ),
+            self._insert_row(
+                cur,
+                "waybills",
+                {
+                    "id": waybill_id,
+                    "is_deleted": 0,
+                    "is_replicated": 0,
+                    "shop_id": options.shop_id,
+                    "waybill_date": waybill_ts,
+                    "record_type": PURCHASE_WAYBILL_RECORD_TYPE,
+                    "payment_type": options.payment_type,
+                    "is_reserve": 0,
+                    "reserve_until": 0,
+                    "contractor_id": options.supplier_id,
+                    "user_id": options.user_id,
+                    "waybill_number": encode_db_text(waybill_number),
+                    "cost": total_cost,
+                    "paid": paid,
+                    "display_string": encode_db_text(display_string),
+                    "comment": encode_db_text(""),
+                    "customer_balls": 0,
+                    "referer_balls": 0,
+                    "currency_id": 0,
+                    "is_archived": 0,
+                    "discount_id": -1,
+                    "discount": 0,
+                    "is_published": 0,
+                    "foreign_id": -1,
+                    "flags": 0,
+                    "repair_status": -1,
+                    "customer_balls_spent": 0,
+                    "referer_balls_spent": 0,
+                },
             )
 
             for item_id, line, good_id, tax_mode in item_rows:
                 qty = round(line.quantity, 6)
                 price = round(line.price, 2)
                 note = normalize_text_field(line.note or "", max_len=250)
-                cur.execute(
-                    """
-                    INSERT INTO waybill_items (
-                        id, is_deleted, is_replicated, waybill_id, goods_id, size_id,
-                        quantity, price, buy_price, vat, discount, set_id, bonus, sold,
-                        buy_cost, buy_currency_id, comment, certificate_id, foreign_id, unit_id, tax_mode
-                    )
-                    VALUES (
-                        ?, 0, 0, ?, ?, -1,
-                        ?, ?, ?, 0, 0, -1, 0, 0,
-                        NULL, 0, CAST(? AS TEXT), -1, -1, -1, ?
-                    )
-                    """,
-                    (
-                        item_id,
-                        waybill_id,
-                        good_id,
-                        qty,
-                        price,
-                        price,
-                        encode_db_text(note),
-                        tax_mode,
-                    ),
+                self._insert_row(
+                    cur,
+                    "waybill_items",
+                    {
+                        "id": item_id,
+                        "is_deleted": 0,
+                        "is_replicated": 0,
+                        "waybill_id": waybill_id,
+                        "goods_id": good_id,
+                        "size_id": -1,
+                        "quantity": qty,
+                        "price": price,
+                        "buy_price": price,
+                        "vat": 0,
+                        "discount": 0,
+                        "set_id": -1,
+                        "bonus": 0,
+                        "sold": 0,
+                        "buy_cost": None,
+                        "buy_currency_id": 0,
+                        "comment": encode_db_text(note),
+                        "certificate_id": -1,
+                        "foreign_id": -1,
+                        "unit_id": -1,
+                        "tax_mode": tax_mode,
+                    },
                 )
 
                 self._upsert_remainders(cur, shop_id=options.shop_id, good_id=good_id, quantity=qty)
@@ -356,89 +399,76 @@ class TirikaDB:
                     2,
                 )
                 force_sell_update = bool(line.raw_data.get("_force_update_sell_price", False))
-                set_clauses: list[str] = []
-                params: list[object] = []
+                set_values: dict[str, object] = {}
 
                 if options.update_existing_buy_price:
-                    set_clauses.append("buy_price = ?")
-                    params.append(price)
-                    set_clauses.append("buy_currency_id = 0")
+                    set_values["buy_price"] = price
+                    set_values["buy_currency_id"] = 0
 
                 if options.update_existing_supplier:
-                    set_clauses.append("supplier_id = ?")
-                    params.append(options.supplier_id)
+                    set_values["supplier_id"] = options.supplier_id
 
                 if options.update_existing_sell_price or force_sell_update:
-                    set_clauses.append("price = ?")
-                    params.append(sell_price)
-                    set_clauses.append("currency_id = 0")
+                    set_values["price"] = sell_price
+                    set_values["currency_id"] = 0
 
                 if options.update_existing_name:
                     name = normalize_text_field(line.matched_name or line.name, max_len=120)
-                    set_clauses.append("name = CAST(? AS TEXT)")
-                    params.append(encode_db_text(name))
+                    set_values["name"] = encode_db_text(name)
 
                 if options.update_existing_manufacturer:
                     manufacturer_raw = str(line.raw_data.get("manufacturer", "") or "").strip()
                     manufacturer = normalize_text_field(manufacturer_raw, max_len=60)
                     if manufacturer:
-                        set_clauses.append("manufacturer = CAST(? AS TEXT)")
-                        params.append(encode_db_text(manufacturer))
+                        set_values["manufacturer"] = encode_db_text(manufacturer)
 
-                if set_clauses:
-                    params.append(good_id)
-                    cur.execute(
-                        f"""
-                        UPDATE goods
-                        SET {", ".join(set_clauses)}
-                        WHERE id = ?
-                        """,
-                        tuple(params),
+                if set_values:
+                    self._update_row(
+                        cur,
+                        "goods",
+                        set_values,
+                        {"id": good_id},
                     )
 
             if options.auto_pay:
-                cur.execute(
-                    """
-                    INSERT INTO payments (
-                        id, waybill_id, payment_date, payment_type, is_deleted, is_replicated,
-                        cost, comment, certificate_id, register_session, register_cheque,
-                        register_serial, payment_order
-                    )
-                    VALUES (
-                        ?, ?, ?, ?, 0, 0,
-                        ?, CAST(? AS TEXT), -1, 0, 0,
-                        CAST(? AS TEXT), 0
-                    )
-                    """,
-                    (
-                        payment_id,
-                        waybill_id,
-                        waybill_ts,
-                        options.payment_type,
-                        total_cost,
-                        encode_db_text(""),
-                        encode_db_text(""),
-                    ),
+                self._insert_row(
+                    cur,
+                    "payments",
+                    {
+                        "id": payment_id,
+                        "waybill_id": waybill_id,
+                        "payment_date": waybill_ts,
+                        "payment_type": options.payment_type,
+                        "is_deleted": 0,
+                        "is_replicated": 0,
+                        "cost": total_cost,
+                        "comment": encode_db_text(""),
+                        "certificate_id": -1,
+                        "register_session": 0,
+                        "register_cheque": 0,
+                        "register_serial": encode_db_text(""),
+                        "payment_order": 0,
+                    },
                 )
 
-            cur.execute(
-                """
-                INSERT INTO operations (
-                    id, is_replicated, user_id, object_type, operation_type, operation_date,
-                    object_id, object_description, operation_description
-                )
-                VALUES (?, 0, ?, ?, ?, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT))
-                """,
-                (
-                    operation_id,
-                    options.user_id,
-                    WAYBILL_OPERATION_OBJECT_TYPE,
-                    WAYBILL_OPERATION_TYPE_CREATE,
-                    waybill_ts,
-                    waybill_id,
-                    encode_db_text(self._build_operation_description(waybill_date, total_cost)),
-                    encode_db_text(f"Импорт накладной: {invoice.file_path.name}"),
-                ),
+            self._insert_row(
+                cur,
+                "operations",
+                {
+                    "id": operation_id,
+                    "is_replicated": 0,
+                    "user_id": options.user_id,
+                    "object_type": WAYBILL_OPERATION_OBJECT_TYPE,
+                    "operation_type": WAYBILL_OPERATION_TYPE_CREATE,
+                    "operation_date": waybill_ts,
+                    "object_id": waybill_id,
+                    "object_description": encode_db_text(
+                        self._build_operation_description(waybill_date, total_cost)
+                    ),
+                    "operation_description": encode_db_text(
+                        f"Импорт накладной: {invoice.file_path.name}"
+                    ),
+                },
             )
 
             self._assert_purchase_only_invariants(
@@ -516,52 +546,81 @@ class TirikaDB:
             2,
         )
 
-        cur.execute(
-            """
-            INSERT INTO goods (
-                id, group_id, is_deleted, is_replicated, is_sized, is_discounted, is_set,
-                name, unit_name, manufacturer, product_code, barcode,
-                price, price1, price2, price3, buy_price, seller_bonus, vat,
-                photo, photo_extention, description, comment, decimal_places,
-                good_type, alco_type, alco_amount, currency_id, currency_id1, currency_id2, currency_id3,
-                buy_currency_id, price_change_date, is_alco_marked, is_tap_trade, alco_strength,
-                is_serial_required, tax_mode, tax_percent, price_advance, price_advance1, price_advance2,
-                price_advance3, register_type, is_published, foreign_id, is_publish, is_estore_delivery,
-                estore_short_description, estore_long_description, estore_meta_title, estore_meta_description,
-                estore_meta_keywords, estore_friendly_url, estore_tags, estore_sort_order, hotkey,
-                price_round, unit_code, old_currency_id, old_price, supplier_id, flags, is_archived,
-                length, width, height, weight, is_ozon_published, marketplaces_id
-            )
-            VALUES (
-                ?, ?, 0, 0, 0, 1, 0,
-                CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT),
-                ?, 0, 0, 0, ?, 0, 0,
-                NULL, CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), 0,
-                0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0,
-                0, 0, 0, -1, 0, 0,
-                NULL, NULL, NULL, NULL,
-                NULL, NULL, NULL, 0, 0,
-                0, 0, 0, 0, ?, 0, 0,
-                0, 0, 0, 0, 0, 0
-            )
-            """,
-            (
-                new_good_id,
-                target_group_id,
-                encode_db_text(name),
-                encode_db_text("шт."),
-                encode_db_text(manufacturer),
-                encode_db_text(article),
-                encode_db_text(""),
-                sell_price,
-                buy_price,
-                encode_db_text(""),
-                encode_db_text(""),
-                encode_db_text(""),
-                supplier_id,
-            ),
+        self._insert_row(
+            cur,
+            "goods",
+            {
+                "id": new_good_id,
+                "group_id": target_group_id,
+                "is_deleted": 0,
+                "is_replicated": 0,
+                "is_sized": 0,
+                "is_discounted": 1,
+                "is_set": 0,
+                "name": encode_db_text(name),
+                "unit_name": encode_db_text("шт."),
+                "manufacturer": encode_db_text(manufacturer),
+                "product_code": encode_db_text(article),
+                "barcode": encode_db_text(""),
+                "price": sell_price,
+                "price1": 0,
+                "price2": 0,
+                "price3": 0,
+                "buy_price": buy_price,
+                "seller_bonus": 0,
+                "vat": 0,
+                "photo": None,
+                "photo_extention": encode_db_text(""),
+                "description": encode_db_text(""),
+                "comment": encode_db_text(""),
+                "decimal_places": 0,
+                "good_type": 0,
+                "alco_type": 0,
+                "alco_amount": 0,
+                "currency_id": 0,
+                "currency_id1": 0,
+                "currency_id2": 0,
+                "currency_id3": 0,
+                "buy_currency_id": 0,
+                "price_change_date": 0,
+                "is_alco_marked": 0,
+                "is_tap_trade": 0,
+                "alco_strength": 0,
+                "is_serial_required": 0,
+                "tax_mode": 0,
+                "tax_percent": 0,
+                "price_advance": 0,
+                "price_advance1": 0,
+                "price_advance2": 0,
+                "price_advance3": 0,
+                "register_type": 0,
+                "is_published": 0,
+                "foreign_id": -1,
+                "is_publish": 0,
+                "is_estore_delivery": 0,
+                "estore_short_description": None,
+                "estore_long_description": None,
+                "estore_meta_title": None,
+                "estore_meta_description": None,
+                "estore_meta_keywords": None,
+                "estore_friendly_url": None,
+                "estore_tags": None,
+                "estore_sort_order": 0,
+                "hotkey": 0,
+                "price_round": 0,
+                "unit_code": 0,
+                "old_currency_id": 0,
+                "old_price": 0,
+                "supplier_id": supplier_id,
+                "flags": 0,
+                "is_archived": 0,
+                "length": 0,
+                "width": 0,
+                "height": 0,
+                "weight": 0,
+                "is_ozon_published": 0,
+                "marketplaces_id": 0,
+            },
         )
         self._insert_auto_cross_code(
             cur=cur,
@@ -590,91 +649,113 @@ class TirikaDB:
                 continue
 
             if int(row[2] or 0) != 0:
-                cur.execute(
-                    """
-                    UPDATE good_groups
-                    SET is_deleted = 0,
-                        is_replicated = 0,
-                        name = CAST(? AS TEXT),
-                        full_name = CAST(? AS TEXT),
-                        parent_id = -1
-                    WHERE id = ?
-                    """,
-                    (encode_db_text("Dazzle"), encode_db_text("Dazzle"), group_id),
+                self._update_row(
+                    cur,
+                    "good_groups",
+                    {
+                        "is_deleted": 0,
+                        "is_replicated": 0,
+                        "name": encode_db_text("Dazzle"),
+                        "full_name": encode_db_text("Dazzle"),
+                        "parent_id": -1,
+                    },
+                    {"id": group_id},
                 )
             return group_id
 
         new_group_id = self._next_id(cur, "good_groups")
-        cur.execute(
-            """
-            INSERT INTO good_groups (
-                id, is_deleted, is_replicated, name, comment, parent_id, full_name, section,
-                is_published, foreign_id, estore_meta_title, estore_meta_description,
-                estore_meta_keywords, estore_friendly_url, estore_sort_order, description
-            )
-            VALUES (
-                ?, 0, 0, CAST(? AS TEXT), CAST(? AS TEXT), -1, CAST(? AS TEXT), 0,
-                0, -1, NULL, NULL,
-                NULL, NULL, 0, CAST(? AS TEXT)
-            )
-            """,
-            (
-                new_group_id,
-                encode_db_text("Dazzle"),
-                encode_db_text(""),
-                encode_db_text("Dazzle"),
-                encode_db_text(""),
-            ),
+        self._insert_row(
+            cur,
+            "good_groups",
+            {
+                "id": new_group_id,
+                "is_deleted": 0,
+                "is_replicated": 0,
+                "name": encode_db_text("Dazzle"),
+                "comment": encode_db_text(""),
+                "parent_id": -1,
+                "full_name": encode_db_text("Dazzle"),
+                "section": 0,
+                "is_published": 0,
+                "foreign_id": -1,
+                "estore_meta_title": None,
+                "estore_meta_description": None,
+                "estore_meta_keywords": None,
+                "estore_friendly_url": None,
+                "estore_sort_order": 0,
+                "description": encode_db_text(""),
+            },
         )
         return new_group_id
 
     def _insert_auto_cross_code(self, cur: sqlite3.Cursor, good_id: int, supplier_name: str) -> None:
+        if not {"good_id", "cross_code"} <= self._table_columns(cur, "cross_codes"):
+            return
         supplier = normalize_text_field(supplier_name, max_len=80)
         supplier = "-".join(supplier.split()) if supplier else "unknown"
         cross_code = f"Dazzle-auto-made-from-{supplier}"
-        cur.execute(
-            """
-            INSERT INTO cross_codes (good_id, cross_code)
-            VALUES (?, CAST(? AS TEXT))
-            """,
-            (good_id, encode_db_text(cross_code)),
+        self._insert_row(
+            cur,
+            "cross_codes",
+            {
+                "good_id": good_id,
+                "cross_code": encode_db_text(cross_code),
+            },
         )
 
     def _upsert_remainders(self, cur: sqlite3.Cursor, shop_id: int, good_id: int, quantity: float) -> None:
+        rem_cols = self._table_columns(cur, "remainders")
+        if not {"shop_id", "good_id"} <= rem_cols:
+            return
+        if "remainder" not in rem_cols:
+            return
+
         row = cur.execute(
-            """
-            SELECT remainder
-            FROM remainders
-            WHERE shop_id = ? AND good_id = ?
+            f"""
+            SELECT {self._qi('remainder')}
+            FROM {self._qi('remainders')}
+            WHERE {self._qi('shop_id')} = ? AND {self._qi('good_id')} = ?
             """,
             (shop_id, good_id),
         ).fetchone()
 
         if row is None:
-            cur.execute(
-                """
-                INSERT INTO remainders (
-                    shop_id, good_id, is_deleted, is_replicated, remainder,
-                    reserved, min_amount, expected, is_published, is_ozon_published
-                )
-                VALUES (?, ?, 0, 0, ?, 0, 0, 0, 0, 0)
-                """,
-                (shop_id, good_id, quantity),
+            self._insert_row(
+                cur,
+                "remainders",
+                {
+                    "shop_id": shop_id,
+                    "good_id": good_id,
+                    "is_deleted": 0,
+                    "is_replicated": 0,
+                    "remainder": quantity,
+                    "reserved": 0,
+                    "min_amount": 0,
+                    "expected": 0,
+                    "is_published": 0,
+                    "is_ozon_published": 0,
+                },
             )
             return
 
-        cur.execute(
-            """
-            UPDATE remainders
-            SET remainder = COALESCE(remainder, 0) + ?,
-                is_deleted = 0,
-                is_replicated = 0
-            WHERE shop_id = ? AND good_id = ?
-            """,
-            (quantity, shop_id, good_id),
+        current_remainder = float(row[0] or 0.0)
+        self._update_row(
+            cur,
+            "remainders",
+            {
+                "remainder": current_remainder + quantity,
+                "is_deleted": 0,
+                "is_replicated": 0,
+            },
+            {
+                "shop_id": shop_id,
+                "good_id": good_id,
+            },
         )
 
     def _get_good_tax_mode(self, cur: sqlite3.Cursor, good_id: int, default: int = 0) -> int:
+        if not self._table_has_column(cur, "goods", "tax_mode"):
+            return default
         row = cur.execute("SELECT tax_mode FROM goods WHERE id = ?", (good_id,)).fetchone()
         if row is None:
             return default
@@ -812,6 +893,62 @@ class TirikaDB:
             raise ImportValidationError(
                 "Контроль безопасности импорта: operation привязан к другому документу."
             )
+
+    @staticmethod
+    def _qi(name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
+    def _table_columns(self, cur: sqlite3.Cursor, table: str) -> set[str]:
+        key = table.lower()
+        cached = self._table_columns_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = cur.execute(f"PRAGMA table_info({self._qi(table)})").fetchall()
+        cols = {decode_db_text(row[1]).strip() for row in rows if len(row) > 1}
+        self._table_columns_cache[key] = cols
+        return cols
+
+    def _table_has_column(self, cur: sqlite3.Cursor, table: str, column: str) -> bool:
+        return column in self._table_columns(cur, table)
+
+    def _insert_row(self, cur: sqlite3.Cursor, table: str, values: dict[str, object]) -> None:
+        cols_available = self._table_columns(cur, table)
+        payload = {k: v for k, v in values.items() if k in cols_available}
+        if not payload:
+            raise ImportValidationError(
+                f"В таблице '{table}' нет совместимых колонок для вставки."
+            )
+
+        columns_sql = ", ".join(self._qi(col) for col in payload.keys())
+        placeholders = ", ".join("?" for _ in payload)
+        params = tuple(payload.values())
+        cur.execute(
+            f"INSERT INTO {self._qi(table)} ({columns_sql}) VALUES ({placeholders})",
+            params,
+        )
+
+    def _update_row(
+        self,
+        cur: sqlite3.Cursor,
+        table: str,
+        set_values: dict[str, object],
+        where_values: dict[str, object],
+    ) -> bool:
+        cols_available = self._table_columns(cur, table)
+        set_payload = {k: v for k, v in set_values.items() if k in cols_available}
+        where_payload = {k: v for k, v in where_values.items() if k in cols_available}
+
+        if not set_payload or not where_payload:
+            return False
+
+        set_sql = ", ".join(f"{self._qi(col)} = ?" for col in set_payload.keys())
+        where_sql = " AND ".join(f"{self._qi(col)} = ?" for col in where_payload.keys())
+        params = tuple(set_payload.values()) + tuple(where_payload.values())
+        cur.execute(
+            f"UPDATE {self._qi(table)} SET {set_sql} WHERE {where_sql}",
+            params,
+        )
+        return True
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)

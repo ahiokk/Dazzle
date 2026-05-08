@@ -82,3 +82,12 @@ except Exception:
         QWidget,
     )
 
+
+def qt_exec(obj, *args, **kwargs):
+    method = getattr(obj, "exec", None)
+    if callable(method):
+        return method(*args, **kwargs)
+    legacy_method = getattr(obj, "exec_", None)
+    if callable(legacy_method):
+        return legacy_method(*args, **kwargs)
+    raise AttributeError(f"{type(obj).__name__} has no exec/exec_ method")

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from tirika_importer.gui import MainWindow
-from tirika_importer.qt_compat import QApplication
+from tirika_importer.qt_compat import QApplication, qt_exec
 
 
 def _is_windows_admin() -> bool:
@@ -77,7 +77,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-    return app.exec()
+    return int(qt_exec(app))
 
 
 if __name__ == "__main__":

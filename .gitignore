@@ -21,8 +21,8 @@ installer_output/
 # Temp/test files
 tmp_shop_for_test.db
 *.bak
+db_examples/
 
 # OS/editor
 .DS_Store
 Thumbs.db
-

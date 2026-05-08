@@ -70,6 +70,7 @@ from .qt_compat import (
     QWidget,
     Qt,
     Signal,
+    qt_exec,
 )
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
@@ -1811,7 +1812,7 @@ class MainWindow(QMainWindow):
         btn_later = dialog.addButton("Напомнить позже", QMessageBox.RejectRole)
         btn_ignore = dialog.addButton("Пропустить эту версию", QMessageBox.DestructiveRole)
         dialog.setDefaultButton(btn_install)
-        dialog.exec()
+        qt_exec(dialog)
 
         clicked = dialog.clickedButton()
         if clicked == btn_ignore:
@@ -2139,7 +2140,7 @@ class MainWindow(QMainWindow):
                 manifest_url_override=manifest_url,
             )
         )
-        if dialog.exec() != QDialog.Accepted:
+        if qt_exec(dialog) != QDialog.Accepted:
             return
         self.app_settings = dialog.values()
         self._save_settings()
@@ -2293,7 +2294,7 @@ class MainWindow(QMainWindow):
             initial_candidates=line.candidates,
             parent=self,
         )
-        if dialog.exec() != QDialog.Accepted or dialog.selected_good_id is None:
+        if qt_exec(dialog) != QDialog.Accepted or dialog.selected_good_id is None:
             return
         try:
             self.matcher.apply_manual_good(line, dialog.selected_good_id)
@@ -2374,7 +2375,7 @@ class MainWindow(QMainWindow):
                 attention_lines = self._collect_import_attention_lines(self.current_invoice.lines)
                 if attention_lines:
                     dialog = ImportConfirmDialog(attention_lines, self)
-                    if dialog.exec() != QDialog.Accepted:
+                    if qt_exec(dialog) != QDialog.Accepted:
                         self._log("Импорт отменен пользователем после просмотра проблемных строк.")
                         return
 
@@ -2449,7 +2450,7 @@ class MainWindow(QMainWindow):
                 invoice_lines=self.current_invoice.lines if self.current_invoice is not None else None,
                 parent=self,
             )
-            result_dialog.exec()
+            qt_exec(result_dialog)
         except ImportValidationError as exc:
             self._error(str(exc), exc=exc)
         except TirikaDBError as exc:
@@ -2832,7 +2833,7 @@ class MainWindow(QMainWindow):
         ):
             action.setEnabled(has_rows and self.current_invoice is not None)
 
-        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        chosen = qt_exec(menu, self.table.viewport().mapToGlobal(pos))
         if chosen is None:
             return
         if chosen == action_copy_cell:
@@ -3249,7 +3250,7 @@ def _show_table_copy_menu(table: QTableWidget, pos, parent: QWidget) -> None:
     action_copy_cell = menu.addAction("Копировать ячейку")
     action_copy_row = menu.addAction("Копировать строку")
     action_copy_selection = menu.addAction("Копировать выделенное")
-    chosen = menu.exec(table.viewport().mapToGlobal(pos))
+    chosen = qt_exec(menu, table.viewport().mapToGlobal(pos))
     if chosen is None:
         return
     if chosen == action_copy_cell:
