@@ -2,16 +2,33 @@
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from .version import is_win7_build
+
 
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest.json?ref=main"
 )
-LEGACY_UPDATE_MANIFEST_URLS = {
+WIN7_UPDATE_MANIFEST_URL = (
+    "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest-win7.json?ref=main"
+)
+NORMAL_UPDATE_MANIFEST_URLS = {
+    DEFAULT_UPDATE_MANIFEST_URL,
     "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest.json",
     "https://github.com/ahiokk/Dazzle/raw/main/updates/latest.json",
 }
+WIN7_UPDATE_MANIFEST_URLS = {
+    WIN7_UPDATE_MANIFEST_URL,
+    "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest-win7.json",
+    "https://github.com/ahiokk/Dazzle/raw/main/updates/latest-win7.json",
+}
+LEGACY_UPDATE_MANIFEST_URLS = NORMAL_UPDATE_MANIFEST_URLS | WIN7_UPDATE_MANIFEST_URLS
+
+
+def default_update_manifest_url() -> str:
+    return WIN7_UPDATE_MANIFEST_URL if is_win7_build() else DEFAULT_UPDATE_MANIFEST_URL
 
 
 @dataclass
@@ -39,7 +56,7 @@ class AppSettings:
     prefix_new_goods_with_order: bool = True
     table_layout_version: int = 2
     table_header_state: str = ""
-    update_manifest_url: str = DEFAULT_UPDATE_MANIFEST_URL
+    update_manifest_url: str = field(default_factory=default_update_manifest_url)
     auto_check_updates: bool = True
     ignored_update_version: str = ""
 
@@ -190,11 +207,12 @@ def _to_nonempty_str(value: object, default: str) -> str:
 
 
 def _normalize_update_manifest_url(url: str) -> str:
+    default_url = default_update_manifest_url()
     value = str(url or "").strip()
     if not value:
-        return DEFAULT_UPDATE_MANIFEST_URL
+        return default_url
     if value in LEGACY_UPDATE_MANIFEST_URLS:
-        return DEFAULT_UPDATE_MANIFEST_URL
+        return default_url
     return value
 
 

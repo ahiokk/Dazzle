@@ -8,8 +8,8 @@
 #ifnexist "assets\dazzle.ico"
   #error "Иконка не найдена: assets\\dazzle.ico"
 #endif
-#ifnexist "assets\default_settings.json"
-  #error "Пресет настроек не найден: assets\\default_settings.json"
+#ifnexist "assets\default_settings_win7.json"
+  #error "Пресет настроек Win7 не найден: assets\\default_settings_win7.json"
 #endif
 
 [Setup]
@@ -39,7 +39,7 @@ Name: "startup"; Description: "Запускать вместе с Windows"; Grou
 
 [Files]
 Source: "dist\DazzleWin7\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "assets\default_settings.json"; DestDir: "{userappdata}\Dazzle"; DestName: "settings.json"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "assets\default_settings_win7.json"; DestDir: "{userappdata}\Dazzle"; DestName: "settings.json"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\Dazzle Win7"; Filename: "{app}\DazzleWin7.exe"; WorkingDir: "{app}"
@@ -48,4 +48,3 @@ Name: "{userstartup}\Dazzle Win7"; Filename: "{app}\DazzleWin7.exe"; Tasks: star
 
 [Run]
 Filename: "{app}\DazzleWin7.exe"; Description: "{cm:LaunchProgram,Dazzle Win7}"; Flags: nowait postinstall skipifsilent
-

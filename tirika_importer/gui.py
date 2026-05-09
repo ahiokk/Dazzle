@@ -74,7 +74,7 @@ from .qt_compat import (
 )
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
-from .version import APP_NAME, APP_VERSION
+from .version import APP_NAME, APP_VERSION, display_app_title
 
 
 COL_LINE = 0
@@ -1389,7 +1389,7 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(display_app_title())
         self.resize(1480, 860)
 
         self.db: TirikaDB | None = None
