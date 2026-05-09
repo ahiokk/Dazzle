@@ -6,6 +6,7 @@ __pycache__/
 # Virtual environments
 .build_venv/
 .build_venv_py313/
+.build_venv_py38_win7/
 .venv/
 venv/
 
