@@ -17,6 +17,7 @@ NOTE_COLUMN_NEEDLES = ["примеч", "прим.", "коммент", "note", "r
 CANCEL_NOTE_PATTERNS = (
     r"\bотмен\w*",
     r"\bотказ\w*",
+    r"\bудален\w*",
     r"\bcancel(?:led|ed)?\b",
     r"\bannul\w*",
     r"\bне\s*прид\w*",
@@ -91,7 +92,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for idx, row in df.iterrows():
-        if _row_has_total_marker(row.tolist()):
+        if _row_has_total_marker(row.tolist()) or _row_has_service_marker(row.tolist()):
             continue
         article = _clean_article(row.iloc[code_col], source_type="mikado_html")
         name = _clean_text(row.iloc[name_col]) if name_col is not None else ""
@@ -154,6 +155,8 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for row in table.rows:
+        if _row_has_service_marker(row):
+            continue
         article = _clean_article(row[code_col], source_type="akvilon_excel") if code_col < len(row) else ""
         if not article:
             continue
@@ -240,6 +243,8 @@ def _parse_forum_paid_excel(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for row in rows[header_idx + 1 :]:
+        if _row_has_service_marker(row):
+            continue
         first_cell = _clean_text(_row_value(row, 0)).lower()
         if first_cell.startswith("всего"):
             break
@@ -324,6 +329,8 @@ def _parse_moskvorechie_excel(path: Path) -> ParsedInvoice:
 
     lines: list[InvoiceLine] = []
     for row in rows[header_idx + 1 :]:
+        if _row_has_service_marker(row):
+            continue
         article = _clean_article(_row_value(row, article_col), source_type="moskvorechie_excel")
         if not article or not _looks_like_article(article):
             continue
@@ -615,6 +622,35 @@ def _row_has_total_marker(row: list[Any]) -> bool:
         if re.match(r"^итог(?:о)?\s*:?", text):
             return True
     return False
+
+
+def _row_has_service_marker(row: list[Any]) -> bool:
+    texts = [_clean_text(value) for value in row if _clean_text(value)]
+    if not texts or not any(_is_service_marker_text(text) for text in texts):
+        return False
+
+    for text in texts:
+        if _is_service_marker_text(text) or _is_structure_only_text(text):
+            continue
+        return False
+    return True
+
+
+def _is_service_marker_text(text: str) -> bool:
+    low = text.lower().replace("ё", "е").strip()
+    compact = re.sub(r"[^0-9a-zа-я]+", "", low)
+    return bool(
+        re.search(r"\bудален\w*\s+из\s+заказ", low, flags=re.IGNORECASE)
+        or "удаленоиззаказ" in compact
+    )
+
+
+def _is_structure_only_text(text: str) -> bool:
+    low = text.lower().strip()
+    if low in {"*", "-", "—", "–"}:
+        return True
+    compact = low.replace(" ", "").replace(",", ".")
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?", compact))
 
 
 def _extract_invoice_header(text: str) -> tuple[str, datetime | None]:

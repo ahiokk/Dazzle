@@ -2680,7 +2680,11 @@ class MainWindow(QMainWindow):
                 sell_price = line.sell_price if line.sell_price is not None else line.price
                 sell_old = self._display_sell_price_in_db(line)
                 diff_pct = line.sell_price_diff_percent
-                markup_pct = self._calculate_markup_percent(buy_price=line.price, sell_price=sell_price)
+                markup_price = sell_old if sell_old is not None else sell_price
+                markup_pct = self._calculate_markup_percent(
+                    buy_price=line.price,
+                    sell_price=markup_price,
+                )
                 values = [
                     str(line.line_no),
                     line.article,

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.15",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.15/Dazzle-Setup-1.0.15.exe",
-  "sha256": "5e9363754ab562f6c9577c322290a206f143cccefcc42ae98951557e51dbabc2",
-  "notes": "Исправили обновление Win7 и отображение версии."
+  "version": "1.0.16",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.16/Dazzle-Setup-1.0.16.exe",
+  "sha256": "fdeb7c5d59bab8fc9789cfbfae4b200cdfcdaf1f1998d4f738cb8bd838c9c1fd",
+  "notes": "Исправили ошибки."
 }

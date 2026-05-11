@@ -101,23 +101,20 @@ class GoodsMatcher:
         article = line.article.strip()
         name = line.name.strip()
 
-        # 1) Автосопоставление только по главному артикулу товара (goods.product_code).
-        main_code_candidates = self._find_primary_by_code(article)
-        if main_code_candidates:
-            line.candidates = main_code_candidates
-            line.similar_articles = _format_similar_articles(main_code_candidates)
-            if len(main_code_candidates) == 1:
-                self._apply_candidate(line, main_code_candidates[0], status="exact")
+        # 1) Точное совпадение по основному артикулу, кросс-коду или штрих-коду.
+        # Если такой код принадлежит одному товару, это надежное автосопоставление.
+        code_candidates = self._find_exact_code_candidates(article)
+        if code_candidates:
+            line.candidates = code_candidates
+            line.similar_articles = _format_similar_articles(code_candidates)
+            if len(code_candidates) == 1:
+                self._apply_candidate(line, code_candidates[0], status="exact")
                 line.action = "import"
                 line.warning = ""
             else:
-                secondary_candidates = self._find_secondary_by_code(article)
-                merged = _merge_candidates(main_code_candidates, secondary_candidates, limit=10)
-                line.candidates = merged
-                line.similar_articles = _format_similar_articles(merged)
                 line.match_status = "ambiguous"
-                line.match_method = "product_code_ambiguous"
-                line.warning = "Несколько товаров по главному артикулу, выберите вручную."
+                line.match_method = "exact_code_ambiguous"
+                line.warning = "Несколько товаров с таким артикулом/штрих-кодом, выберите вручную."
                 line.matched_good_id = None
                 line.matched_name = line.name
                 line.matched_product_code = line.article
@@ -131,36 +128,7 @@ class GoodsMatcher:
                 line.action = "skip"
             return
 
-        # 2) Если точного совпадения по главному коду нет, показываем похожие из cross_codes/barcodes.
-        secondary_code_candidates = self._find_secondary_by_code(article)
-        if secondary_code_candidates:
-            line.candidates = secondary_code_candidates
-            line.similar_articles = _format_similar_articles(secondary_code_candidates)
-            if len(secondary_code_candidates) == 1:
-                self._apply_candidate(line, secondary_code_candidates[0], status="exact")
-                line.action = "import"
-                line.warning = "Автосопоставление по кросс-коду/штрихкоду."
-            else:
-                line.match_status = "ambiguous"
-                line.match_method = "secondary_code_hint"
-                line.warning = (
-                    "Точный основной артикул не найден. "
-                    "Есть несколько похожих по кросс-кодам/штрихкоду."
-                )
-                line.matched_good_id = None
-                line.matched_name = line.name
-                line.matched_product_code = line.article
-                line.matched_buy_price = None
-                line.existing_sell_price = None
-                line.sell_price = line.price
-                line.suggested_sell_price = None
-                line.sell_price_diff_percent = None
-                line.price_alert = False
-                line.matched_tax_mode = 0
-                line.action = "skip"
-            return
-
-        # 3) Фолбэк по названию.
+        # 2) Фолбэк по названию.
         name_candidates = self._find_by_name(name, limit=8)
         line.candidates = name_candidates
         line.similar_articles = _format_similar_articles(name_candidates)
@@ -296,6 +264,11 @@ class GoodsMatcher:
         line.similar_articles = _format_similar_articles([cand])
         line.action = "import"
         line.warning = ""
+
+    def _find_exact_code_candidates(self, article: str) -> list[MatchCandidate]:
+        primary = self._find_primary_by_code(article)
+        secondary = self._find_secondary_by_code(article)
+        return _merge_candidates(primary, secondary, limit=10)
 
     def _find_primary_by_code(self, article: str) -> list[MatchCandidate]:
         article_raw = article.strip()
