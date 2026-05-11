@@ -478,6 +478,31 @@ class DbOpenWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class CatalogLoadWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, db_path: Path, shop_id: int, run_matching_after: bool) -> None:
+        super().__init__()
+        self._db_path = Path(db_path)
+        self._shop_id = int(shop_id)
+        self._run_matching_after = bool(run_matching_after)
+
+    def run(self) -> None:
+        try:
+            db = TirikaDB(self._db_path)
+            catalog = db.load_goods_catalog(shop_id=self._shop_id)
+            self.finished.emit(
+                {
+                    "shop_id": self._shop_id,
+                    "catalog": catalog,
+                    "run_matching_after": self._run_matching_after,
+                }
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class InvoiceLoadWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
@@ -490,6 +515,63 @@ class InvoiceLoadWorker(QObject):
         try:
             invoice = parse_invoice_file(self._invoice_path)
             self.finished.emit(invoice)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class MatchWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, matcher: GoodsMatcher, lines: list[InvoiceLine], record_history: bool) -> None:
+        super().__init__()
+        self._matcher = matcher
+        self._lines = lines
+        self._record_history = bool(record_history)
+
+    def run(self) -> None:
+        try:
+            self._matcher.match_lines(self._lines)
+            self.finished.emit(
+                {
+                    "record_history": self._record_history,
+                    "line_count": len(self._lines),
+                }
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ImportWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        db: TirikaDB,
+        invoice: ParsedInvoice,
+        options: ImportOptions,
+        supplier_name: str,
+        payment_name: str,
+    ) -> None:
+        super().__init__()
+        self._db = db
+        self._invoice = invoice
+        self._options = options
+        self._supplier_name = supplier_name
+        self._payment_name = payment_name
+
+    def run(self) -> None:
+        try:
+            result = self._db.import_invoice(self._invoice, self._options)
+            self.finished.emit(
+                {
+                    "result": result,
+                    "dry_run": self._options.dry_run,
+                    "supplier_name": self._supplier_name,
+                    "payment_name": self._payment_name,
+                }
+            )
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -1415,14 +1497,41 @@ class MainWindow(QMainWindow):
         self._pending_update_info: UpdateInfo | None = None
         self._db_open_thread: QThread | None = None
         self._db_open_worker: DbOpenWorker | None = None
+        self._catalog_load_thread: QThread | None = None
+        self._catalog_load_worker: CatalogLoadWorker | None = None
         self._invoice_load_thread: QThread | None = None
         self._invoice_load_worker: InvoiceLoadWorker | None = None
+        self._match_thread: QThread | None = None
+        self._match_worker: MatchWorker | None = None
+        self._import_thread: QThread | None = None
+        self._import_worker: ImportWorker | None = None
         self._ui_busy_counter = 0
 
         self._build_ui()
         self._apply_styles()
         self._set_ui_busy(True, "Инициализация...")
         QTimer.singleShot(0, self._load_initial_config)
+
+    def closeEvent(self, event) -> None:
+        if self._has_running_worker():
+            QMessageBox.warning(
+                self,
+                "Операция выполняется",
+                "Дождитесь завершения текущей операции, чтобы безопасно закрыть программу.",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def _has_running_worker(self) -> bool:
+        threads = (
+            self._db_open_thread,
+            self._catalog_load_thread,
+            self._invoice_load_thread,
+            self._match_thread,
+            self._import_thread,
+        )
+        return any(thread is not None and thread.isRunning() for thread in threads)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -1783,6 +1892,9 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "table") and self.table is not None:
             self.table.setEnabled(ui_enabled)
+
+        if ui_enabled and hasattr(self, "undo_btn") and hasattr(self, "redo_btn"):
+            self._update_history_buttons()
 
     def _set_debug_log_enabled(self, enabled: bool) -> None:
         self.debug_log_enabled = bool(enabled)
@@ -2256,9 +2368,7 @@ class MainWindow(QMainWindow):
         if self.db is None or new_db_path != previous_db_path:
             self._open_db()
         else:
-            self._reload_catalog()
-            if self.current_invoice is not None:
-                self._run_matching()
+            self._reload_catalog(run_matching_after=self.current_invoice is not None)
 
     def _open_db(self) -> None:
         if self._db_open_thread is not None and self._db_open_thread.isRunning():
@@ -2381,26 +2491,69 @@ class MainWindow(QMainWindow):
             self._db_open_thread.deleteLater()
             self._db_open_thread = None
 
-    def _reload_catalog(self) -> None:
+    def _reload_catalog(self, *, run_matching_after: bool = False) -> None:
         if self.db is None:
             return
+        if self._catalog_load_thread is not None and self._catalog_load_thread.isRunning():
+            return
+        raw = self.app_settings.db_path.strip()
+        if not raw:
+            return
+        db_path = Path(raw)
+        if db_path.is_dir():
+            db_path = db_path / "shop.db"
         self._set_ui_busy(True, "Обновление каталога...")
+        shop_id = self._selected_data(self.shop_combo, 0)
+        self._catalog_load_thread = QThread(self)
+        self._catalog_load_worker = CatalogLoadWorker(
+            db_path=db_path,
+            shop_id=shop_id,
+            run_matching_after=run_matching_after,
+        )
+        self._catalog_load_worker.moveToThread(self._catalog_load_thread)
+
+        self._catalog_load_thread.started.connect(self._catalog_load_worker.run)
+        self._catalog_load_worker.finished.connect(self._on_catalog_loaded)
+        self._catalog_load_worker.failed.connect(self._on_catalog_load_failed)
+        self._catalog_load_worker.finished.connect(self._catalog_load_thread.quit)
+        self._catalog_load_worker.failed.connect(self._catalog_load_thread.quit)
+        self._catalog_load_thread.finished.connect(self._cleanup_catalog_load_worker)
+        self._catalog_load_thread.start()
+
+    def _on_catalog_loaded(self, payload: object) -> None:
         try:
-            shop_id = self._selected_data(self.shop_combo, 0)
-            catalog = self.db.load_goods_catalog(shop_id=shop_id)
+            data = payload if isinstance(payload, dict) else {}
+            catalog = dict(data.get("catalog", {}) or {})
+            shop_id = int(data.get("shop_id", self.app_settings.shop_id))
+            self.app_settings.shop_id = shop_id
             self.matcher = GoodsMatcher(catalog)
+            self._save_settings(silent=True)
             self._log(f"Каталог загружен: {len(catalog)} товаров.")
+            if bool(data.get("run_matching_after", False)) and self.current_invoice is not None:
+                self._run_matching()
+        except Exception as exc:
+            self._error("Ошибка обработки каталога", exc=exc)
         finally:
             self._set_ui_busy(False)
+
+    def _on_catalog_load_failed(self, message: str) -> None:
+        self._error(f"Ошибка загрузки каталога: {message}")
+        self._set_ui_busy(False)
+
+    def _cleanup_catalog_load_worker(self) -> None:
+        if self._catalog_load_worker is not None:
+            self._catalog_load_worker.deleteLater()
+            self._catalog_load_worker = None
+        if self._catalog_load_thread is not None:
+            self._catalog_load_thread.deleteLater()
+            self._catalog_load_thread = None
 
     def _on_shop_changed(self) -> None:
         self.app_settings.shop_id = self._selected_data(self.shop_combo, self.app_settings.shop_id)
         self._save_settings(silent=True)
         if self.db is None:
             return
-        self._reload_catalog()
-        if self.current_invoice:
-            self._run_matching()
+        self._reload_catalog(run_matching_after=self.current_invoice is not None)
 
     def _load_invoice(self) -> None:
         if self._is_ui_busy():
@@ -2413,6 +2566,20 @@ class MainWindow(QMainWindow):
             return
 
         invoice_path = Path(raw)
+        if self.current_invoice is not None and _same_path(invoice_path, self.current_invoice.file_path):
+            reply = QMessageBox.question(
+                self,
+                "Перезагрузить накладную?",
+                (
+                    f"Накладная уже загружена:\n{invoice_path.name}\n\n"
+                    "Перезагрузить ее заново? Ручные изменения в таблице будут сброшены."
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         self._set_ui_busy(True, f"Загрузка накладной: {invoice_path.name}...")
         self._invoice_load_thread = QThread(self)
         self._invoice_load_worker = InvoiceLoadWorker(invoice_path=invoice_path)
@@ -2441,8 +2608,9 @@ class MainWindow(QMainWindow):
                 f"строк={len(invoice.lines)}, поставщик={invoice.supplier_hint}."
             )
             if self.matcher:
-                self._run_matching(record_history=False)
-            self._record_history_state(force=True)
+                self._run_matching(record_history=True)
+            else:
+                self._record_history_state(force=True)
         except InvoiceParseError as exc:
             self._error(str(exc), exc=exc)
         except Exception as exc:
@@ -2469,16 +2637,57 @@ class MainWindow(QMainWindow):
         if self.matcher is None:
             self._error("Сначала откройте базу.")
             return
+        if self._match_thread is not None and self._match_thread.isRunning():
+            return
 
         try:
             self._sync_lines_from_table(strict=False)
-            self.matcher.match_lines(self.current_invoice.lines)
-            self._populate_table(self.current_invoice.lines)
-            if record_history:
-                self._record_history_state()
-            self._log("Автосопоставление выполнено.")
         except ImportValidationError as exc:
             self._error(str(exc), exc=exc)
+            return
+
+        self._set_ui_busy(True, "Сопоставление товаров...")
+        self._match_thread = QThread(self)
+        self._match_worker = MatchWorker(
+            matcher=self.matcher,
+            lines=self.current_invoice.lines,
+            record_history=record_history,
+        )
+        self._match_worker.moveToThread(self._match_thread)
+
+        self._match_thread.started.connect(self._match_worker.run)
+        self._match_worker.finished.connect(self._on_matching_finished)
+        self._match_worker.failed.connect(self._on_matching_failed)
+        self._match_worker.finished.connect(self._match_thread.quit)
+        self._match_worker.failed.connect(self._match_thread.quit)
+        self._match_thread.finished.connect(self._cleanup_match_worker)
+        self._match_thread.start()
+
+    def _on_matching_finished(self, payload: object) -> None:
+        try:
+            data = payload if isinstance(payload, dict) else {}
+            if self.current_invoice is not None:
+                self._populate_table(self.current_invoice.lines)
+                if bool(data.get("record_history", True)):
+                    self._record_history_state()
+            line_count = int(data.get("line_count", 0) or 0)
+            self._log(f"Автосопоставление выполнено: строк={line_count}.")
+        except Exception as exc:
+            self._error("Ошибка завершения сопоставления", exc=exc)
+        finally:
+            self._set_ui_busy(False)
+
+    def _on_matching_failed(self, message: str) -> None:
+        self._error(f"Ошибка сопоставления: {message}")
+        self._set_ui_busy(False)
+
+    def _cleanup_match_worker(self) -> None:
+        if self._match_worker is not None:
+            self._match_worker.deleteLater()
+            self._match_worker = None
+        if self._match_thread is not None:
+            self._match_thread.deleteLater()
+            self._match_thread = None
 
     def _pick_good_for_selected(self) -> None:
         if self.current_invoice is None or self.matcher is None:
@@ -2565,6 +2774,8 @@ class MainWindow(QMainWindow):
         if self.db is None:
             self._error("Сначала откройте базу.")
             return
+        if self._import_thread is not None and self._import_thread.isRunning():
+            return
         if self.supplier_combo.count() == 0:
             self._error("Список поставщиков пуст. Проверьте открытие базы.")
             return
@@ -2600,63 +2811,136 @@ class MainWindow(QMainWindow):
             )
             supplier_name = _extract_supplier_name(self.supplier_combo.currentText())
             payment_name = self.payment_combo.currentText().strip()
-            result = self.db.import_invoice(self.current_invoice, options)
-            detailed_lines = [
-                f"dry-run: {result.dry_run}",
-                f"импортировано строк: {result.imported_lines}",
-                f"skip строк: {result.skipped_lines}",
-                f"создано товаров: {result.created_goods}",
-                f"сумма документа: {result.total_cost:.2f}",
-                f"поставщик: {supplier_name}",
-                f"оплата: {payment_name}",
-            ]
-            if result.waybill_id is not None:
-                detailed_lines.append(f"waybill_id: {result.waybill_id}")
-            if result.backup_path:
-                detailed_lines.append(f"backup: {result.backup_path}")
-
-            if result.warnings:
-                detailed_lines.append("предупреждения:")
-                detailed_lines.extend([f"- {w}" for w in result.warnings[:20]])
-
-            simple_lines = [
-                f"Успешно обработано строк: {result.imported_lines + result.skipped_lines}",
-                f"Импортировано: {result.imported_lines}",
-                f"SKIP: {result.skipped_lines}",
-                f"Новых товаров: {result.created_goods}",
-                f"Сумма накладной: {_fmt_number(result.total_cost, 2)}",
-                f"Поставщик: {supplier_name}",
-                f"Оплата: {payment_name}",
-            ]
-            if result.waybill_id is not None:
-                simple_lines.append(f"Документ в базе: № {result.waybill_id}")
-            if result.warnings:
-                simple_lines.append(f"Есть предупреждения: {len(result.warnings)}")
-                simple_lines.extend([f"- {w}" for w in result.warnings[:3]])
-                if len(result.warnings) > 3:
-                    simple_lines.append("...")
-
-            if self.debug_log_enabled:
-                self._log("\n".join(detailed_lines))
-            else:
-                self._log(" | ".join(simple_lines[:6]))
-
-            result_dialog = ImportResultDialog(
-                result,
-                dry_run=dry_run,
-                debug_mode=self.debug_log_enabled,
+            self._start_import_worker(
+                options=options,
                 supplier_name=supplier_name,
                 payment_name=payment_name,
-                invoice_lines=self.current_invoice.lines if self.current_invoice is not None else None,
-                parent=self,
             )
-            qt_exec(result_dialog)
         except ImportValidationError as exc:
             self._error(str(exc), exc=exc)
         except TirikaDBError as exc:
             self._error(str(exc), exc=exc)
         except Exception as exc:
             self._error("Ошибка импорта", exc=exc)
+
+    def _start_import_worker(
+        self,
+        *,
+        options: ImportOptions,
+        supplier_name: str,
+        payment_name: str,
+    ) -> None:
+        if self.db is None or self.current_invoice is None:
+            return
+        self._set_ui_busy(True, "Запись импорта в базу...")
+        self._import_thread = QThread(self)
+        self._import_worker = ImportWorker(
+            db=self.db,
+            invoice=self.current_invoice,
+            options=options,
+            supplier_name=supplier_name,
+            payment_name=payment_name,
+        )
+        self._import_worker.moveToThread(self._import_thread)
+
+        self._import_thread.started.connect(self._import_worker.run)
+        self._import_worker.finished.connect(self._on_import_finished)
+        self._import_worker.failed.connect(self._on_import_failed)
+        self._import_worker.finished.connect(self._import_thread.quit)
+        self._import_worker.failed.connect(self._import_thread.quit)
+        self._import_thread.finished.connect(self._cleanup_import_worker)
+        self._import_thread.start()
+
+    def _on_import_finished(self, payload: object) -> None:
+        try:
+            data = payload if isinstance(payload, dict) else {}
+            result = data.get("result")
+            if not isinstance(result, ImportResult):
+                raise TirikaDBError("Некорректный результат импорта.")
+            dry_run = bool(data.get("dry_run", result.dry_run))
+            supplier_name = str(data.get("supplier_name", "") or "")
+            payment_name = str(data.get("payment_name", "") or "")
+            self._set_ui_busy(False)
+            self._handle_import_result(
+                result=result,
+                dry_run=dry_run,
+                supplier_name=supplier_name,
+                payment_name=payment_name,
+            )
+        except Exception as exc:
+            self._set_ui_busy(False)
+            self._error("Ошибка завершения импорта", exc=exc)
+
+    def _on_import_failed(self, message: str) -> None:
+        self._error(f"Ошибка импорта: {message}")
+        self._set_ui_busy(False)
+
+    def _cleanup_import_worker(self) -> None:
+        if self._import_worker is not None:
+            self._import_worker.deleteLater()
+            self._import_worker = None
+        if self._import_thread is not None:
+            self._import_thread.deleteLater()
+            self._import_thread = None
+
+    def _handle_import_result(
+        self,
+        *,
+        result: ImportResult,
+        dry_run: bool,
+        supplier_name: str,
+        payment_name: str,
+    ) -> None:
+        detailed_lines = [
+            f"dry-run: {result.dry_run}",
+            f"импортировано строк: {result.imported_lines}",
+            f"skip строк: {result.skipped_lines}",
+            f"создано товаров: {result.created_goods}",
+            f"сумма документа: {result.total_cost:.2f}",
+            f"поставщик: {supplier_name}",
+            f"оплата: {payment_name}",
+        ]
+        if result.waybill_id is not None:
+            detailed_lines.append(f"waybill_id: {result.waybill_id}")
+        if result.backup_path:
+            detailed_lines.append(f"backup: {result.backup_path}")
+
+        if result.warnings:
+            detailed_lines.append("предупреждения:")
+            detailed_lines.extend([f"- {w}" for w in result.warnings[:20]])
+
+        simple_lines = [
+            f"Успешно обработано строк: {result.imported_lines + result.skipped_lines}",
+            f"Импортировано: {result.imported_lines}",
+            f"SKIP: {result.skipped_lines}",
+            f"Новых товаров: {result.created_goods}",
+            f"Сумма накладной: {_fmt_number(result.total_cost, 2)}",
+            f"Поставщик: {supplier_name}",
+            f"Оплата: {payment_name}",
+        ]
+        if result.waybill_id is not None:
+            simple_lines.append(f"Документ в базе: № {result.waybill_id}")
+        if result.warnings:
+            simple_lines.append(f"Есть предупреждения: {len(result.warnings)}")
+            simple_lines.extend([f"- {w}" for w in result.warnings[:3]])
+            if len(result.warnings) > 3:
+                simple_lines.append("...")
+
+        if self.debug_log_enabled:
+            self._log("\n".join(detailed_lines))
+        else:
+            self._log(" | ".join(simple_lines[:6]))
+
+        result_dialog = ImportResultDialog(
+            result,
+            dry_run=dry_run,
+            debug_mode=self.debug_log_enabled,
+            supplier_name=supplier_name,
+            payment_name=payment_name,
+            invoice_lines=self.current_invoice.lines if self.current_invoice is not None else None,
+            parent=self,
+        )
+        qt_exec(result_dialog)
 
     def _collect_import_attention_lines(self, lines: list[InvoiceLine]) -> list[InvoiceLine]:
         out: list[InvoiceLine] = []
@@ -2671,6 +2955,11 @@ class MainWindow(QMainWindow):
 
     def _populate_table(self, lines: list[InvoiceLine]) -> None:
         self._table_locked = True
+        table_updates_enabled = self.table.updatesEnabled()
+        viewport_updates_enabled = self.table.viewport().updatesEnabled()
+        table_signals_blocked = self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+        self.table.viewport().setUpdatesEnabled(False)
         try:
             sorting_was_enabled = self.table.isSortingEnabled()
             self.table.setSortingEnabled(False)
@@ -2805,7 +3094,7 @@ class MainWindow(QMainWindow):
             if lines and not self._column_layout_initialized:
                 self._restoring_header_state = True
                 try:
-                    self.table.resizeColumnsToContents()
+                    self._apply_initial_column_widths(lines)
                 finally:
                     self._restoring_header_state = False
                 self._column_layout_initialized = True
@@ -2813,7 +3102,40 @@ class MainWindow(QMainWindow):
             self._apply_table_filter()
             self.table.setSortingEnabled(sorting_was_enabled)
         finally:
+            self.table.blockSignals(table_signals_blocked)
+            self.table.viewport().setUpdatesEnabled(viewport_updates_enabled)
+            self.table.setUpdatesEnabled(table_updates_enabled)
+            self.table.viewport().update()
             self._table_locked = False
+
+    def _apply_initial_column_widths(self, lines: list[InvoiceLine]) -> None:
+        if len(lines) <= 250:
+            self.table.resizeColumnsToContents()
+            return
+
+        widths = {
+            COL_LINE: 54,
+            COL_ARTICLE: 130,
+            COL_NAME: 300,
+            COL_NOTE: 150,
+            COL_QTY: 76,
+            COL_BUY_PRICE: 90,
+            COL_SUM: 96,
+            COL_SELL_PRICE: 112,
+            COL_SELL_PRICE_OLD: 112,
+            COL_SELL_DIFF: 72,
+            COL_MARKUP: 92,
+            COL_STATUS: 128,
+            COL_ACTION: 110,
+            COL_GOOD_ID: 84,
+            COL_GOOD_CODE: 130,
+            COL_GOOD_NAME: 260,
+            COL_SIMILAR: 180,
+            COL_METHOD: 150,
+            COL_WARNING: 260,
+        }
+        for col, width in widths.items():
+            self.table.setColumnWidth(col, width)
 
     def _sync_lines_from_table(self, strict: bool = True) -> None:
         if self.current_invoice is None or self.matcher is None:
@@ -3388,6 +3710,13 @@ def _fmt_number(value: float, digits: int) -> str:
     if "." in out:
         out = out.rstrip("0").rstrip(".")
     return out
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except Exception:
+        return str(left).lower().strip() == str(right).lower().strip()
 
 
 def _fill_payment_combo(combo: QComboBox) -> None:

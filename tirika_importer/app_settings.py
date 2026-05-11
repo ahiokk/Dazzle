@@ -78,13 +78,14 @@ def load_app_settings() -> AppSettings:
         return AppSettings()
 
     defaults = AppSettings()
+    has_payment_type = "payment_type" in raw
     mapping_version_raw = raw.get("payment_mapping_version")
     if mapping_version_raw is None:
         mapping_version = 1
     else:
         mapping_version = _to_int(mapping_version_raw, defaults.payment_mapping_version)
     payment_type = _to_int(raw.get("payment_type"), defaults.payment_type)
-    if mapping_version < defaults.payment_mapping_version:
+    if mapping_version < defaults.payment_mapping_version and has_payment_type:
         payment_type = _migrate_payment_type_from_legacy(payment_type)
     mapping_version = defaults.payment_mapping_version
 

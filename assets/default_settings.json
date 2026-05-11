@@ -1,4 +1,6 @@
 {
+  "payment_type": 1,
+  "payment_mapping_version": 2,
   "update_manifest_url": "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest.json?ref=main",
   "auto_check_updates": true,
   "ignored_update_version": ""
