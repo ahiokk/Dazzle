@@ -165,7 +165,7 @@ def _fetch_manifest(manifest_url: str, timeout_sec: float) -> dict[str, object]:
             req = Request(url, headers={"User-Agent": "Dazzle-Updater/1.0"})
             try:
                 with urlopen(req, timeout=timeout_sec) as resp:
-                    payload = resp.read().decode("utf-8")
+                    payload = resp.read().decode("utf-8-sig")
                 raw = _parse_manifest_payload(payload)
                 if not isinstance(raw, dict):
                     raise UpdateError("Manifest должен быть JSON-объектом.")
@@ -180,7 +180,7 @@ def _fetch_manifest(manifest_url: str, timeout_sec: float) -> dict[str, object]:
 
 def _parse_manifest_payload(payload: str) -> dict[str, object]:
     try:
-        raw = json.loads(payload)
+        raw = json.loads(payload.lstrip("\ufeff"))
     except Exception as exc:
         raise UpdateError(f"Manifest обновлений не является валидным JSON: {exc}") from exc
 
@@ -189,8 +189,8 @@ def _parse_manifest_payload(payload: str) -> dict[str, object]:
     if isinstance(raw, dict) and "content" in raw and "encoding" in raw and "version" not in raw:
         try:
             encoded = str(raw.get("content", "") or "")
-            decoded = base64.b64decode(encoded, validate=False).decode("utf-8")
-            raw = json.loads(decoded)
+            decoded = base64.b64decode(encoded, validate=False).decode("utf-8-sig")
+            raw = json.loads(decoded.lstrip("\ufeff"))
         except Exception as exc:
             raise UpdateError(f"Не удалось разобрать manifest из GitHub API: {exc}") from exc
 
