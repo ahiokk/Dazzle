@@ -94,3 +94,92 @@ class ImportResult:
     total_cost: float
     warnings: list[str] = field(default_factory=list)
 
+
+@dataclass
+class OzonComponentLine:
+    line_no: int
+    order_number: str
+    posting_number: str
+    status: str
+    source_article: str
+    article: str
+    article_options: list[str]
+    name: str
+    quantity: float
+    source_quantity: float
+    source_unit_price: float
+    source_total: float
+    paid_unit_price: float
+    paid_total: float
+    sku: str = ""
+
+    match_status: str = "not_found"
+    match_method: str = ""
+    warning: str = ""
+    action: str = "import"
+
+    matched_good_id: int | None = None
+    matched_product_code: str = ""
+    matched_name: str = ""
+    matched_buy_price: float | None = None
+    existing_sell_price: float | None = None
+    sale_price: float | None = None
+    sale_total: float | None = None
+    remainder_source: float | None = None
+    matched_tax_mode: int = 0
+    candidates: list[MatchCandidate] = field(default_factory=list)
+
+
+@dataclass
+class ParsedOzonCsv:
+    file_path: Path
+    lines: list[OzonComponentLine]
+    raw_rows: int
+    order_count: int
+    posting_count: int
+
+    @property
+    def import_lines(self) -> list[OzonComponentLine]:
+        return [line for line in self.lines if line.action == "import"]
+
+
+@dataclass
+class OzonImportOptions:
+    user_id: int
+    source_shop_id: int
+    target_shop_id: int
+    ozon_contractor_id: int
+    payment_type: int
+    dry_run: bool
+    backup_before_import: bool
+    waybill_date: datetime | None = None
+    sale_number: str = ""
+    existing_sale_waybill_id: int | None = None
+
+
+@dataclass
+class OzonImportResult:
+    success: bool
+    dry_run: bool
+    backup_path: Path | None
+    transfer_waybill_id: int | None
+    sale_waybill_id: int | None
+    imported_lines: int
+    skipped_lines: int
+    order_count: int
+    posting_count: int
+    transfer_cost: float
+    sale_cost: float
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class OzonSaleDocument:
+    waybill_id: int
+    waybill_date: datetime
+    number: str
+    cost: float
+    paid: float
+    item_count: int
+    display: str
+

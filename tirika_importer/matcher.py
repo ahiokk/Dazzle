@@ -266,6 +266,9 @@ class GoodsMatcher:
         line.action = "import"
         line.warning = ""
 
+    def find_exact_code_candidates(self, article: str, limit: int = 10) -> list[MatchCandidate]:
+        return self._find_exact_code_candidates(article, limit=limit)
+
     def _find_exact_code_candidates(self, article: str, limit: int = 10) -> list[MatchCandidate]:
         for source in self._match_source_order():
             candidates = self._find_by_code_source(article, source, limit=limit)

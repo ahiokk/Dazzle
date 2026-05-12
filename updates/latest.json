@@ -1,6 +1,6 @@
-{
-  "version": "1.0.19",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.19/Dazzle-Setup-1.0.19.exe",
-  "sha256": "d68d36c29841ca01fdf7d4868de0235cf5d363996556ad92d0f1bfda941b1946",
-  "notes": "Исправили поиск по штрих-коду."
+﻿{
+  "version": "1.0.20",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.20/Dazzle-Setup-1.0.20.exe",
+  "sha256": "c9d83b19e09f892e3b26638a07d5991a6a18527bd3e18facbeaf03481e5c51c4",
+  "notes": "Добавлен режим Ozon CSV."
 }

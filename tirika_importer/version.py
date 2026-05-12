@@ -6,7 +6,7 @@ import sys
 
 APP_NAME = "Dazzle"
 APP_WIN7_NAME = "Dazzle Win7"
-APP_VERSION = "1.0.19"
+APP_VERSION = "1.0.20"
 
 
 def is_win7_build() -> bool:
@@ -24,3 +24,4 @@ def display_app_name() -> str:
 
 def display_app_title() -> str:
     return f"{display_app_name()} {APP_VERSION}"
+
