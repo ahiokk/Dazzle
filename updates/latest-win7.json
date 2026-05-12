@@ -1,6 +1,6 @@
 {
-  "version": "1.0.18",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.18/Dazzle-Win7-Setup-1.0.18.exe",
-  "sha256": "0cfa18ca1037588350cbb3aa543d910306a9cc8780cb63e01abfc245a274a7d2",
-  "notes": "Улучшили сопоставление товаров."
+  "version": "1.0.19",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.19/Dazzle-Win7-Setup-1.0.19.exe",
+  "sha256": "3f416d4780ac3f0fa065ad7c5bfc80e0d018b61ac3b9e7149ac1f1b9dbab8fa1",
+  "notes": "Исправили поиск по штрих-коду."
 }

@@ -116,6 +116,7 @@ class TirikaDB:
             goods_cols = self._table_columns(cur, "goods")
 
             product_code_expr = self._qi("product_code") if "product_code" in goods_cols else "''"
+            barcode_expr = self._qi("barcode") if "barcode" in goods_cols else "''"
             name_expr = self._qi("name") if "name" in goods_cols else "''"
             manufacturer_expr = self._qi("manufacturer") if "manufacturer" in goods_cols else "''"
             buy_price_expr = self._qi("buy_price") if "buy_price" in goods_cols else "0"
@@ -133,6 +134,7 @@ class TirikaDB:
                 SELECT
                     {self._qi("id")},
                     {product_code_expr},
+                    {barcode_expr},
                     {name_expr},
                     {manufacturer_expr},
                     {buy_price_expr},
@@ -148,13 +150,16 @@ class TirikaDB:
                 catalog[gid] = GoodRecord(
                     good_id=gid,
                     product_code=decode_db_text(row[1]),
-                    name=decode_db_text(row[2]),
-                    manufacturer=decode_db_text(row[3]),
-                    buy_price=float(row[4] or 0.0),
-                    sell_price=float(row[5] or 0.0),
-                    tax_mode=int(row[6] or 0),
-                    supplier_id=int(row[7] or 0),
+                    name=decode_db_text(row[3]),
+                    manufacturer=decode_db_text(row[4]),
+                    buy_price=float(row[5] or 0.0),
+                    sell_price=float(row[6] or 0.0),
+                    tax_mode=int(row[7] or 0),
+                    supplier_id=int(row[8] or 0),
                 )
+                barcode = decode_db_text(row[2]).strip()
+                if barcode:
+                    catalog[gid].barcodes.append(barcode)
 
             remainder_cols = self._table_columns(cur, "remainders")
             if {"good_id", "shop_id"} <= remainder_cols:
