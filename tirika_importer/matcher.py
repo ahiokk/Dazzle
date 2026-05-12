@@ -54,12 +54,15 @@ def build_article_variants(article: str) -> list[str]:
 
 
 class GoodsMatcher:
-    def __init__(self, catalog: dict[int, GoodRecord]) -> None:
+    def __init__(self, catalog: dict[int, GoodRecord], article_match_field: str = "product_code") -> None:
         self.catalog = catalog
+        self.article_match_field = _normalize_match_field(article_match_field)
         self._product_exact_index: dict[str, list[_IndexEntry]] = defaultdict(list)
         self._product_alnum_index: dict[str, list[_IndexEntry]] = defaultdict(list)
-        self._secondary_exact_index: dict[str, list[_IndexEntry]] = defaultdict(list)
-        self._secondary_alnum_index: dict[str, list[_IndexEntry]] = defaultdict(list)
+        self._cross_exact_index: dict[str, list[_IndexEntry]] = defaultdict(list)
+        self._cross_alnum_index: dict[str, list[_IndexEntry]] = defaultdict(list)
+        self._barcode_exact_index: dict[str, list[_IndexEntry]] = defaultdict(list)
+        self._barcode_alnum_index: dict[str, list[_IndexEntry]] = defaultdict(list)
         self._norm_names: dict[int, str] = {}
         self._build_indexes()
 
@@ -77,17 +80,17 @@ class GoodsMatcher:
                 exact = normalize_code(cross)
                 alnum = normalize_code_alnum(cross)
                 if exact:
-                    self._secondary_exact_index[exact].append(_IndexEntry(good.good_id, "cross_code"))
+                    self._cross_exact_index[exact].append(_IndexEntry(good.good_id, "cross_code"))
                 if alnum:
-                    self._secondary_alnum_index[alnum].append(_IndexEntry(good.good_id, "cross_code"))
+                    self._cross_alnum_index[alnum].append(_IndexEntry(good.good_id, "cross_code"))
 
             for barcode in good.barcodes:
                 exact = normalize_code(barcode)
                 alnum = normalize_code_alnum(barcode)
                 if exact:
-                    self._secondary_exact_index[exact].append(_IndexEntry(good.good_id, "barcode"))
+                    self._barcode_exact_index[exact].append(_IndexEntry(good.good_id, "barcode"))
                 if alnum:
-                    self._secondary_alnum_index[alnum].append(_IndexEntry(good.good_id, "barcode"))
+                    self._barcode_alnum_index[alnum].append(_IndexEntry(good.good_id, "barcode"))
 
             self._norm_names[good.good_id] = normalize_name(good.name)
 
@@ -101,8 +104,8 @@ class GoodsMatcher:
         article = line.article.strip()
         name = line.name.strip()
 
-        # 1) Точное совпадение по основному артикулу, кросс-коду или штрих-коду.
-        # Если такой код принадлежит одному товару, это надежное автосопоставление.
+        # 1) Точное совпадение по выбранному главному полю.
+        # Если код принадлежит одному товару, это надежное автосопоставление.
         code_candidates = self._find_exact_code_candidates(article)
         if code_candidates:
             line.candidates = code_candidates
@@ -114,7 +117,7 @@ class GoodsMatcher:
             else:
                 line.match_status = "ambiguous"
                 line.match_method = "exact_code_ambiguous"
-                line.warning = "Несколько товаров с таким артикулом/штрих-кодом, выберите вручную."
+                line.warning = "Несколько товаров с таким кодом, выберите вручную."
                 line.matched_good_id = None
                 line.matched_name = line.name
                 line.matched_product_code = line.article
@@ -171,12 +174,10 @@ class GoodsMatcher:
             return [self._candidate_from_good(self.catalog[i], "browse", 0.0) for i in ids[:limit]]
 
         # Keep manual search consistent with automatic matching:
-        # first try exact/article-like matches by main code and secondary codes.
-        primary_candidates = self._find_primary_by_code(q_raw)
-        secondary_candidates = self._find_secondary_by_code(q_raw)
-        merged_exact = _merge_candidates(primary_candidates, secondary_candidates, limit=limit)
-        if merged_exact:
-            return merged_exact[:limit]
+        # first try the same exact/source-priority path as automatic matching.
+        exact_candidates = self._find_exact_code_candidates(q_raw, limit=limit)
+        if exact_candidates:
+            return exact_candidates[:limit]
 
         items: list[tuple[float, MatchCandidate]] = []
         q_norm_name = normalize_name(query)
@@ -265,69 +266,75 @@ class GoodsMatcher:
         line.action = "import"
         line.warning = ""
 
-    def _find_exact_code_candidates(self, article: str) -> list[MatchCandidate]:
-        primary = self._find_primary_by_code(article)
-        secondary = self._find_secondary_by_code(article)
-        return _merge_candidates(primary, secondary, limit=10)
+    def _find_exact_code_candidates(self, article: str, limit: int = 10) -> list[MatchCandidate]:
+        for source in self._match_source_order():
+            candidates = self._find_by_code_source(article, source, limit=limit)
+            if candidates:
+                return candidates[:limit]
+        return []
+
+    def _match_source_order(self) -> list[str]:
+        if self.article_match_field == "barcode":
+            return ["barcode", "product_code", "cross_code"]
+        return ["product_code", "barcode", "cross_code"]
 
     def _find_primary_by_code(self, article: str) -> list[MatchCandidate]:
+        return self._find_by_code_source(article, "product_code")
+
+    def _find_secondary_by_code(self, article: str) -> list[MatchCandidate]:
+        barcode = self._find_by_code_source(article, "barcode")
+        cross = self._find_by_code_source(article, "cross_code")
+        return _merge_candidates(barcode, cross, limit=10)
+
+    def _find_by_code_source(self, article: str, source: str, limit: int = 10) -> list[MatchCandidate]:
         article_raw = article.strip()
         if not article_raw:
             return []
 
         bucket: dict[int, MatchCandidate] = {}
-        exact_key = normalize_code(article_raw)
-        if exact_key:
-            for entry in self._product_exact_index.get(exact_key, []):
-                good = self.catalog.get(entry.good_id)
-                if not good:
-                    continue
-                score = 1.0
-                cand = self._candidate_from_good(good, f"code_exact_{entry.source}", score)
-                bucket[good.good_id] = _pick_best(bucket.get(good.good_id), cand)
+        exact_index, alnum_index = self._indexes_for_source(source)
+        variants = [article_raw] if source == "product_code" else build_article_variants(article_raw)
+        exact_score, alnum_score = _scores_for_source(source)
 
-        alnum_key = normalize_code_alnum(article_raw)
-        if alnum_key:
-            for entry in self._product_alnum_index.get(alnum_key, []):
-                good = self.catalog.get(entry.good_id)
-                if not good:
-                    continue
-                score = 0.97
-                cand = self._candidate_from_good(good, f"code_alnum_{entry.source}", score)
-                bucket[good.good_id] = _pick_best(bucket.get(good.good_id), cand)
-
-        out = sorted(bucket.values(), key=lambda x: x.score, reverse=True)
-        return out[:10]
-
-    def _find_secondary_by_code(self, article: str) -> list[MatchCandidate]:
-        variants = build_article_variants(article)
-        if not variants:
-            return []
-
-        bucket: dict[int, MatchCandidate] = {}
         for variant in variants:
             exact_key = normalize_code(variant)
             if exact_key:
-                for entry in self._secondary_exact_index.get(exact_key, []):
+                for entry in exact_index.get(exact_key, []):
                     good = self.catalog.get(entry.good_id)
                     if not good:
                         continue
-                    score = 0.94 if entry.source == "cross_code" else 0.92
-                    cand = self._candidate_from_good(good, f"secondary_exact_{entry.source}", score)
+                    cand = self._candidate_from_good(
+                        good,
+                        f"code_exact_{entry.source}",
+                        exact_score,
+                    )
                     bucket[good.good_id] = _pick_best(bucket.get(good.good_id), cand)
 
             alnum_key = normalize_code_alnum(variant)
             if alnum_key:
-                for entry in self._secondary_alnum_index.get(alnum_key, []):
+                for entry in alnum_index.get(alnum_key, []):
                     good = self.catalog.get(entry.good_id)
                     if not good:
                         continue
-                    score = 0.9 if entry.source == "cross_code" else 0.88
-                    cand = self._candidate_from_good(good, f"secondary_alnum_{entry.source}", score)
+                    cand = self._candidate_from_good(
+                        good,
+                        f"code_alnum_{entry.source}",
+                        alnum_score,
+                    )
                     bucket[good.good_id] = _pick_best(bucket.get(good.good_id), cand)
 
         out = sorted(bucket.values(), key=lambda x: x.score, reverse=True)
-        return out[:10]
+        return out[:limit]
+
+    def _indexes_for_source(
+        self,
+        source: str,
+    ) -> tuple[dict[str, list[_IndexEntry]], dict[str, list[_IndexEntry]]]:
+        if source == "barcode":
+            return self._barcode_exact_index, self._barcode_alnum_index
+        if source == "cross_code":
+            return self._cross_exact_index, self._cross_alnum_index
+        return self._product_exact_index, self._product_alnum_index
 
     def _find_by_name(self, name: str, limit: int = 8) -> list[MatchCandidate]:
         target = normalize_name(name)
@@ -397,6 +404,20 @@ def _looks_like_article_query(value: str) -> bool:
     has_digit = any(ch.isdigit() for ch in text)
     has_alpha = any(ch.isalpha() for ch in text)
     return has_digit and (has_alpha or len(text) >= 6)
+
+
+def _normalize_match_field(value: str) -> str:
+    if str(value or "").strip().lower() == "barcode":
+        return "barcode"
+    return "product_code"
+
+
+def _scores_for_source(source: str) -> tuple[float, float]:
+    if source == "product_code":
+        return 1.0, 0.97
+    if source == "barcode":
+        return 0.98, 0.95
+    return 0.94, 0.90
 
 
 def _pick_best(current: MatchCandidate | None, incoming: MatchCandidate) -> MatchCandidate:

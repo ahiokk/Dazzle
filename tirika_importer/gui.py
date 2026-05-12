@@ -1095,6 +1095,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._supplier_id = current.supplier_id
         self._payment_type_default = current.payment_type
+        self._article_match_field_default = current.article_match_field
         self._table_header_state = current.table_header_state
         self._ignored_update_version = current.ignored_update_version
         self._update_manifest_url = (
@@ -1244,6 +1245,30 @@ class SettingsDialog(QDialog):
         options_layout.setSpacing(10)
         import_layout_root.addWidget(options_group)
 
+        matching_group = QGroupBox("Сопоставление товаров", self)
+        matching_layout = QGridLayout(matching_group)
+        matching_layout.setHorizontalSpacing(10)
+        matching_layout.setVerticalSpacing(8)
+
+        matching_hint = QLabel(
+            "Выберите, какое поле в базе считать главным артикулом при поиске товара из накладной.",
+            self,
+        )
+        matching_hint.setObjectName("subtitleLabel")
+        matching_hint.setWordWrap(True)
+        matching_layout.addWidget(matching_hint, 0, 0, 1, 2)
+
+        matching_layout.addWidget(QLabel("Главное поле поиска:"), 1, 0)
+        self.article_match_field_combo = QComboBox(self)
+        self.article_match_field_combo.addItem("Артикул товара", userData="product_code")
+        self.article_match_field_combo.addItem("Штрих-код товара", userData="barcode")
+        self.article_match_field_combo.setToolTip(
+            "Если выбрано 'Штрих-код товара', Dazzle сначала ищет артикул накладной в штрих-кодах. "
+            "Это полезно для баз Tirika, где артикулы сохранены в поле штрих-кода."
+        )
+        matching_layout.addWidget(self.article_match_field_combo, 1, 1)
+        options_layout.addWidget(matching_group)
+
         existing_group = QGroupBox("Если товар уже найден в базе", self)
         existing_layout = QGridLayout(existing_group)
         existing_layout.setHorizontalSpacing(10)
@@ -1355,6 +1380,7 @@ class SettingsDialog(QDialog):
         self._set_combo_by_data(self.user_combo, current.user_id)
         self._set_combo_by_data(self.shop_combo, current.shop_id)
         self._set_combo_by_data(self.payment_combo, current.payment_type)
+        self._set_combo_by_text_data(self.article_match_field_combo, current.article_match_field)
         self._refresh_startup_button()
 
         buttons = QDialogButtonBox(
@@ -1424,6 +1450,10 @@ class SettingsDialog(QDialog):
             auto_pay=self.auto_pay_cb.isChecked(),
             backup_before_import=self.backup_cb.isChecked(),
             prefix_new_goods_with_order=self.prefix_order_name_cb.isChecked(),
+            article_match_field=self._selected_text_data(
+                self.article_match_field_combo,
+                self._article_match_field_default,
+            ),
             table_header_state=self._table_header_state,
             update_manifest_url=self._update_manifest_url,
             auto_check_updates=self.auto_update_check_cb.isChecked(),
@@ -1466,6 +1496,23 @@ class SettingsDialog(QDialog):
             if data is not None and int(data) == int(target):
                 combo.setCurrentIndex(idx)
                 return
+
+    @staticmethod
+    def _set_combo_by_text_data(combo: QComboBox, target: str) -> None:
+        target_text = str(target or "").strip().lower()
+        for idx in range(combo.count()):
+            data = str(combo.itemData(idx) or "").strip().lower()
+            if data == target_text:
+                combo.setCurrentIndex(idx)
+                return
+
+    @staticmethod
+    def _selected_text_data(combo: QComboBox, default: str) -> str:
+        data = combo.currentData()
+        if data is None:
+            return default
+        text = str(data or "").strip()
+        return text or default
 
 
 class MainWindow(QMainWindow):
@@ -2456,7 +2503,10 @@ class MainWindow(QMainWindow):
             self.db = TirikaDB(Path(self.app_settings.db_path))
             self.app_settings.shop_id = effective_shop_id
             self._apply_reference_data(suppliers, users, shops)
-            self.matcher = GoodsMatcher(catalog)
+            self.matcher = GoodsMatcher(
+                catalog,
+                article_match_field=self.app_settings.article_match_field,
+            )
             self._save_settings(silent=True)
 
             self._log(f"База открыта: {self.app_settings.db_path}")
@@ -2526,7 +2576,10 @@ class MainWindow(QMainWindow):
             catalog = dict(data.get("catalog", {}) or {})
             shop_id = int(data.get("shop_id", self.app_settings.shop_id))
             self.app_settings.shop_id = shop_id
-            self.matcher = GoodsMatcher(catalog)
+            self.matcher = GoodsMatcher(
+                catalog,
+                article_match_field=self.app_settings.article_match_field,
+            )
             self._save_settings(silent=True)
             self._log(f"Каталог загружен: {len(catalog)} товаров.")
             if bool(data.get("run_matching_after", False)) and self.current_invoice is not None:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -6,7 +6,7 @@ import sys
 
 APP_NAME = "Dazzle"
 APP_WIN7_NAME = "Dazzle Win7"
-APP_VERSION = "1.0.17"
+APP_VERSION = "1.0.18"
 
 
 def is_win7_build() -> bool:

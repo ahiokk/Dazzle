@@ -31,6 +31,10 @@ def default_update_manifest_url() -> str:
     return WIN7_UPDATE_MANIFEST_URL if is_win7_build() else DEFAULT_UPDATE_MANIFEST_URL
 
 
+def default_article_match_field() -> str:
+    return "barcode" if is_win7_build() else "product_code"
+
+
 @dataclass
 class AppSettings:
     db_path: str = ""
@@ -54,6 +58,7 @@ class AppSettings:
     auto_pay: bool = True
     backup_before_import: bool = True
     prefix_new_goods_with_order: bool = True
+    article_match_field: str = field(default_factory=default_article_match_field)
     table_layout_version: int = 2
     table_header_state: str = ""
     update_manifest_url: str = field(default_factory=default_update_manifest_url)
@@ -151,6 +156,10 @@ def load_app_settings() -> AppSettings:
             raw.get("prefix_new_goods_with_order"),
             defaults.prefix_new_goods_with_order,
         ),
+        article_match_field=_normalize_article_match_field(
+            raw.get("article_match_field"),
+            defaults.article_match_field,
+        ),
         table_layout_version=layout_version,
         table_header_state=table_header_state,
         update_manifest_url=_normalize_update_manifest_url(
@@ -205,6 +214,15 @@ def _to_nonempty_str(value: object, default: str) -> str:
     if text:
         return text
     return str(default or "")
+
+
+def _normalize_article_match_field(value: object, default: str = "product_code") -> str:
+    text = str(value or "").strip().lower()
+    if text in {"product_code", "barcode"}:
+        return text
+    if str(default or "").strip().lower() == "barcode":
+        return "barcode"
+    return "product_code"
 
 
 def _normalize_update_manifest_url(url: str) -> str:
