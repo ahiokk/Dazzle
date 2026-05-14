@@ -25,8 +25,10 @@ CANCEL_NOTE_PATTERNS = (
 )
 
 try:
+    import pythoncom  # type: ignore[import-not-found]
     import win32com.client  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover
+    pythoncom = None  # type: ignore[assignment]
     win32com = None  # type: ignore[assignment]
 
 
@@ -38,6 +40,19 @@ class InvoiceParseError(RuntimeError):
 class ParsedTable:
     headers: list[str]
     rows: list[list[Any]]
+
+
+@contextlib.contextmanager
+def _excel_com_session():
+    initialized = False
+    if pythoncom is not None:
+        pythoncom.CoInitialize()  # required when parsing runs in a worker thread
+        initialized = True
+    try:
+        yield
+    finally:
+        if initialized and pythoncom is not None:
+            pythoncom.CoUninitialize()
 
 
 def parse_invoice_file(path: Path) -> ParsedInvoice:
@@ -416,39 +431,41 @@ def _read_excel_table_via_com(path: Path) -> ParsedTable:
     excel = None
     workbook = None
     try:
-        excel = win32com.client.DispatchEx("Excel.Application")  # type: ignore[union-attr]
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        workbook = excel.Workbooks.Open(str(path.resolve()), ReadOnly=True)
-        sheet = workbook.Worksheets(1)
-        used = sheet.UsedRange
-        rows = used.Rows.Count
-        cols = used.Columns.Count
+        with _excel_com_session():
+            try:
+                excel = win32com.client.DispatchEx("Excel.Application")  # type: ignore[union-attr]
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                workbook = excel.Workbooks.Open(str(path.resolve()), ReadOnly=True)
+                sheet = workbook.Worksheets(1)
+                used = sheet.UsedRange
+                rows = used.Rows.Count
+                cols = used.Columns.Count
 
-        headers: list[str] = []
-        raw_rows: list[list[Any]] = []
+                headers: list[str] = []
+                raw_rows: list[list[Any]] = []
 
-        for c in range(1, cols + 1):
-            headers.append(_clean_text(sheet.Cells(1, c).Value))
+                for c in range(1, cols + 1):
+                    headers.append(_clean_text(sheet.Cells(1, c).Value))
 
-        for r in range(2, rows + 1):
-            row: list[Any] = []
-            non_empty = False
-            for c in range(1, cols + 1):
-                val = sheet.Cells(r, c).Value
-                row.append(val)
-                if val not in (None, ""):
-                    non_empty = True
-            if non_empty:
-                raw_rows.append(row)
-        return ParsedTable(headers=headers, rows=raw_rows)
+                for r in range(2, rows + 1):
+                    row: list[Any] = []
+                    non_empty = False
+                    for c in range(1, cols + 1):
+                        val = sheet.Cells(r, c).Value
+                        row.append(val)
+                        if val not in (None, ""):
+                            non_empty = True
+                    if non_empty:
+                        raw_rows.append(row)
+                return ParsedTable(headers=headers, rows=raw_rows)
+            finally:
+                if workbook is not None:
+                    workbook.Close(SaveChanges=False)
+                if excel is not None:
+                    excel.Quit()
     except Exception as exc:
         raise InvoiceParseError(f"Не удалось прочитать Excel через COM: {exc}") from exc
-    finally:
-        if workbook is not None:
-            workbook.Close(SaveChanges=False)
-        if excel is not None:
-            excel.Quit()
 
 
 def _read_excel_matrix_via_com(path: Path) -> list[list[Any]]:
@@ -460,34 +477,36 @@ def _read_excel_matrix_via_com(path: Path) -> list[list[Any]]:
     excel = None
     workbook = None
     try:
-        excel = win32com.client.DispatchEx("Excel.Application")  # type: ignore[union-attr]
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        workbook = excel.Workbooks.Open(str(path.resolve()), ReadOnly=True)
-        sheet = workbook.Worksheets(1)
-        used = sheet.UsedRange
-        rows_count = used.Rows.Count
-        cols_count = used.Columns.Count
+        with _excel_com_session():
+            try:
+                excel = win32com.client.DispatchEx("Excel.Application")  # type: ignore[union-attr]
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                workbook = excel.Workbooks.Open(str(path.resolve()), ReadOnly=True)
+                sheet = workbook.Worksheets(1)
+                used = sheet.UsedRange
+                rows_count = used.Rows.Count
+                cols_count = used.Columns.Count
 
-        matrix: list[list[Any]] = []
-        for r in range(1, rows_count + 1):
-            row: list[Any] = []
-            has_data = False
-            for c in range(1, cols_count + 1):
-                val = sheet.Cells(r, c).Value
-                row.append(val)
-                if _clean_text(val):
-                    has_data = True
-            if has_data:
-                matrix.append(row)
-        return matrix
+                matrix: list[list[Any]] = []
+                for r in range(1, rows_count + 1):
+                    row: list[Any] = []
+                    has_data = False
+                    for c in range(1, cols_count + 1):
+                        val = sheet.Cells(r, c).Value
+                        row.append(val)
+                        if _clean_text(val):
+                            has_data = True
+                    if has_data:
+                        matrix.append(row)
+                return matrix
+            finally:
+                if workbook is not None:
+                    workbook.Close(SaveChanges=False)
+                if excel is not None:
+                    excel.Quit()
     except Exception as exc:
         raise InvoiceParseError(f"Не удалось прочитать Excel через COM: {exc}") from exc
-    finally:
-        if workbook is not None:
-            workbook.Close(SaveChanges=False)
-        if excel is not None:
-            excel.Quit()
 
 
 def _find_header_row(

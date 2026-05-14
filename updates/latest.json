@@ -1,6 +1,6 @@
 {
-  "version": "1.0.22",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.22/Dazzle-Setup-1.0.22.exe",
-  "sha256": "9fcaf56bdd71157c8475b5947d327523b7f75296f38e9e67383a663f5d30f082",
-  "notes": "?????? ????? ??? ??????? ???????."
+  "version": "1.0.23",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.23/Dazzle-Setup-1.0.23.exe",
+  "sha256": "4465c98495807d98885cda54080c1aeea0fc4eb45cebf8256df1fcfc02c3767d",
+  "notes": "Исправлено чтение Excel на Win7."
 }
