@@ -45,7 +45,7 @@ class AppSettings:
     supplier_id: int = 1
     user_id: int = 1
     shop_id: int = 0
-    payment_type: int = 1
+    payment_type: int = -1
     payment_mapping_version: int = 2
     create_missing_goods: bool = True
     update_existing_goods_fields: bool = False
@@ -55,7 +55,7 @@ class AppSettings:
     update_existing_supplier: bool = True
     update_existing_name: bool = False
     update_existing_manufacturer: bool = False
-    auto_pay: bool = True
+    auto_pay: bool = False
     backup_before_import: bool = True
     prefix_new_goods_with_order: bool = True
     article_match_field: str = field(default_factory=default_article_match_field)
@@ -119,7 +119,7 @@ def load_app_settings() -> AppSettings:
         supplier_id=_to_int(raw.get("supplier_id"), defaults.supplier_id),
         user_id=_to_int(raw.get("user_id"), defaults.user_id),
         shop_id=_to_int(raw.get("shop_id"), defaults.shop_id),
-        payment_type=payment_type,
+        payment_type=-1,
         payment_mapping_version=mapping_version,
         create_missing_goods=_to_bool(raw.get("create_missing_goods"), defaults.create_missing_goods),
         update_existing_goods_fields=_to_bool(
@@ -150,7 +150,9 @@ def load_app_settings() -> AppSettings:
             raw.get("update_existing_manufacturer"),
             defaults.update_existing_manufacturer,
         ),
-        auto_pay=_to_bool(raw.get("auto_pay"), defaults.auto_pay),
+        # Purchase payments are intentionally not written by Dazzle. Direct writes to
+        # Tirika's payments table can desynchronize cash/paydesk totals after edits.
+        auto_pay=False,
         backup_before_import=_to_bool(raw.get("backup_before_import"), defaults.backup_before_import),
         prefix_new_goods_with_order=_to_bool(
             raw.get("prefix_new_goods_with_order"),

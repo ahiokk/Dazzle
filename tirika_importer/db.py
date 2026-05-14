@@ -383,7 +383,12 @@ class TirikaDB:
                 sum(line.total if line.total > 0 else line.quantity * line.price for _, line, _, _ in item_rows),
                 2,
             )
-            paid = total_cost if options.auto_pay else 0.0
+            # Safety rule: Dazzle must not write purchase payments directly.
+            # Tirika keeps cash/paydesk state separately; direct payment rows can make
+            # later payment-type changes or document deletion desynchronize cash totals.
+            safe_auto_pay = False
+            paid = 0.0
+            purchase_payment_type = -1
             display_string = self._build_display_string(item_rows)
             waybill_number = invoice.invoice_number.strip()[:20]
 
@@ -397,7 +402,7 @@ class TirikaDB:
                     "shop_id": options.shop_id,
                     "waybill_date": waybill_ts,
                     "record_type": PURCHASE_WAYBILL_RECORD_TYPE,
-                    "payment_type": options.payment_type,
+                    "payment_type": purchase_payment_type,
                     "is_reserve": 0,
                     "reserve_until": 0,
                     "contractor_id": options.supplier_id,
@@ -497,7 +502,7 @@ class TirikaDB:
                         {"id": good_id},
                     )
 
-            if options.auto_pay:
+            if safe_auto_pay:
                 self._insert_row(
                     cur,
                     "payments",
@@ -533,7 +538,7 @@ class TirikaDB:
                         self._build_operation_description(waybill_date, total_cost)
                     ),
                     "operation_description": encode_db_text(
-                        f"Импорт накладной: {invoice.file_path.name}"
+                        f"Импорт накладной без оплаты: {invoice.file_path.name}"
                     ),
                 },
             )
@@ -548,8 +553,14 @@ class TirikaDB:
                 expected_items=len(item_rows),
                 supplier_id=options.supplier_id,
                 user_id=options.user_id,
-                auto_pay=options.auto_pay,
+                auto_pay=safe_auto_pay,
             )
+
+            if options.auto_pay:
+                warnings.append(
+                    "Оплата закупки не записана автоматически: "
+                    "для защиты кассы оплату нужно оформить в Tirika."
+                )
 
             if options.dry_run:
                 conn.rollback()

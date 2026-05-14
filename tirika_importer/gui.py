@@ -133,6 +133,7 @@ OZ_COL_ACTION = 11
 OZ_COL_WARNING = 12
 
 PAYMENT_OPTIONS: tuple[tuple[str, int], ...] = (
+    ("Не оплачено", -1),
     ("Наличные", 0),
     ("Безнал", 1),
     ("Карта", 5),
@@ -1948,7 +1949,11 @@ class SettingsDialog(QDialog):
         import_layout.addWidget(QLabel("Оплата:"), 1, 0)
         self.payment_combo = QComboBox(self)
         _fill_payment_combo(self.payment_combo)
-        self.payment_combo.setToolTip("Тип оплаты, который попадет в документ закупки.")
+        self.payment_combo.setEnabled(False)
+        self.payment_combo.setToolTip(
+            "Безопасный режим: Dazzle не записывает оплату закупки напрямую. "
+            "Оплату нужно оформить в Tirika после импорта."
+        )
         import_layout.addWidget(self.payment_combo, 1, 1)
 
         options_group = QGroupBox("Поведение импорта", self)
@@ -2063,9 +2068,13 @@ class SettingsDialog(QDialog):
         doc_layout.setHorizontalSpacing(10)
         doc_layout.setVerticalSpacing(8)
 
-        self.auto_pay_cb = QCheckBox("Считать закупку оплаченной", self)
-        self.auto_pay_cb.setChecked(current.auto_pay)
-        self.auto_pay_cb.setToolTip("Автоматически создает запись оплаты по накладной.")
+        self.auto_pay_cb = QCheckBox("Не записывать оплату автоматически (безопасно)", self)
+        self.auto_pay_cb.setChecked(True)
+        self.auto_pay_cb.setEnabled(False)
+        self.auto_pay_cb.setToolTip(
+            "Оплата закупки создается только в Tirika. "
+            "Так Dazzle не ломает кассу при смене оплаты или удалении накладной."
+        )
         doc_layout.addWidget(self.auto_pay_cb, 0, 0)
 
         self.backup_cb = QCheckBox("Backup перед импортом", self)
@@ -2150,7 +2159,7 @@ class SettingsDialog(QDialog):
             supplier_id=self._supplier_id,
             user_id=self._selected_data(self.user_combo, 1),
             shop_id=self._selected_data(self.shop_combo, 0),
-            payment_type=self._selected_data(self.payment_combo, self._payment_type_default),
+            payment_type=-1,
             create_missing_goods=self.create_missing_cb.isChecked(),
             update_existing_goods_fields=False,
             update_goods_buy_price=self.update_existing_buy_cb.isChecked(),
@@ -2159,7 +2168,7 @@ class SettingsDialog(QDialog):
             update_existing_supplier=self.update_existing_supplier_cb.isChecked(),
             update_existing_name=self.update_existing_name_cb.isChecked(),
             update_existing_manufacturer=self.update_existing_manufacturer_cb.isChecked(),
-            auto_pay=self.auto_pay_cb.isChecked(),
+            auto_pay=False,
             backup_before_import=self.backup_cb.isChecked(),
             prefix_new_goods_with_order=self.prefix_order_name_cb.isChecked(),
             article_match_field=self._selected_text_data(
@@ -2397,7 +2406,11 @@ class MainWindow(QMainWindow):
         _fill_payment_combo(self.payment_combo)
         self.payment_combo.setMinimumWidth(120)
         self.payment_combo.setMaximumWidth(120)
-        self.payment_combo.setToolTip("Тип оплаты для создаваемой закупки.")
+        self.payment_combo.setEnabled(False)
+        self.payment_combo.setToolTip(
+            "Безопасный режим: Dazzle создает закупку без оплаты. "
+            "Оплату нужно оформить в Tirika, чтобы касса пересчитывалась штатно."
+        )
         context_row.addWidget(self.payment_combo)
 
         self.invoice_totals_label = QLabel("Кол-во: 0 | Сумма: 0", self)
@@ -2468,6 +2481,8 @@ class MainWindow(QMainWindow):
         self.update_goods_card_cb = QCheckBox()
         self.update_buy_price_cb = QCheckBox()
         self.auto_pay_cb = QCheckBox()
+        self.auto_pay_cb.setChecked(False)
+        self.auto_pay_cb.setEnabled(False)
         self.backup_cb = QCheckBox()
         self._apply_settings_to_runtime_controls()
 
@@ -3034,7 +3049,8 @@ class MainWindow(QMainWindow):
         self.create_missing_cb.setChecked(self.app_settings.create_missing_goods)
         self.update_goods_card_cb.setChecked(self.app_settings.update_existing_sell_price)
         self.update_buy_price_cb.setChecked(self.app_settings.update_existing_buy_price)
-        self.auto_pay_cb.setChecked(self.app_settings.auto_pay)
+        self.auto_pay_cb.setChecked(False)
+        self.auto_pay_cb.setEnabled(False)
         self.backup_cb.setChecked(self.app_settings.backup_before_import)
 
         combos = (
@@ -3601,7 +3617,7 @@ class MainWindow(QMainWindow):
                 supplier_id=self._selected_data(self.supplier_combo, 1),
                 user_id=self._selected_data(self.user_combo, 1),
                 shop_id=self._selected_data(self.shop_combo, 0),
-                payment_type=self._selected_data(self.payment_combo, self.app_settings.payment_type),
+                payment_type=-1,
                 dry_run=dry_run,
                 create_missing_goods=self.create_missing_cb.isChecked(),
                 update_existing_goods_fields=False,
@@ -3612,12 +3628,12 @@ class MainWindow(QMainWindow):
                 update_existing_name=self.app_settings.update_existing_name,
                 update_existing_manufacturer=self.app_settings.update_existing_manufacturer,
                 backup_before_import=self.backup_cb.isChecked(),
-                auto_pay=self.auto_pay_cb.isChecked(),
+                auto_pay=False,
                 prefix_new_goods_with_order=self.app_settings.prefix_new_goods_with_order,
                 waybill_date=datetime.now(),
             )
             supplier_name = _extract_supplier_name(self.supplier_combo.currentText())
-            payment_name = self.payment_combo.currentText().strip()
+            payment_name = "Не оплачено (оплатить в Tirika)"
             self._start_import_worker(
                 options=options,
                 supplier_name=supplier_name,
