@@ -19,6 +19,8 @@ from .models import (
     OzonSaleDocument,
     ParsedInvoice,
     ParsedOzonCsv,
+    TirikaOrder,
+    TirikaOrderItem,
 )
 
 PURCHASE_WAYBILL_RECORD_TYPE = 1
@@ -27,8 +29,12 @@ WAYBILL_OPERATION_TYPE_CREATE = 1
 WAYBILL_OPERATION_TYPE_UPDATE = 0
 OZON_TRANSFER_RECORD_TYPE = 0
 OZON_SALE_RECORD_TYPE = -1
+RETAIL_SALE_RECORD_TYPE = -1
 TRANSFER_OPERATION_OBJECT_TYPE = 2
 SALE_OPERATION_OBJECT_TYPE = 1
+# Контрагент-покупатель, на которого оформляются заказы клиентов
+# (в базе имя записано как « З А К А З» — буквы через пробел).
+ORDER_CUSTOMER_DEFAULT_NAME = "ЗАКАЗ"
 
 
 class TirikaDBError(RuntimeError):
@@ -92,6 +98,25 @@ class TirikaDB:
                 """
             ).fetchall()
         return [(int(row[0]), decode_db_text(row[1])) for row in rows]
+
+    def list_customers(self) -> list[tuple[int, str]]:
+        """Покупатели (контрагенты с is_supplier=0) — для автодополнения имени."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, name
+                FROM suppliers
+                WHERE COALESCE(is_deleted, 0) = 0
+                  AND COALESCE(is_supplier, 0) = 0
+                ORDER BY name, id
+                """
+            ).fetchall()
+        out: list[tuple[int, str]] = []
+        for row in rows:
+            name = decode_db_text(row[1]).strip()
+            if name:
+                out.append((int(row[0]), name))
+        return out
 
     def list_shops(self) -> list[tuple[int, str]]:
         shops: list[tuple[int, str]] = []
@@ -170,6 +195,159 @@ class TirikaDB:
                 )
             )
         return docs
+
+    # --- Заказы покупателей (read-only) -------------------------------------
+
+    def find_order_customer(self, configured_name: str = "") -> tuple[int, str] | None:
+        """Найти контрагента-покупателя для заказов.
+
+        По умолчанию ищет контрагента, чьё имя без пробелов равно «ЗАКАЗ»
+        (в базе имя обычно записано как « З А К А З»). Можно задать своё имя.
+        Возвращает (id, отображаемое_имя) или None.
+        """
+        target = _normalize_contractor_name(configured_name) or _normalize_contractor_name(
+            ORDER_CUSTOMER_DEFAULT_NAME
+        )
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, name, COALESCE(is_supplier, 0), COALESCE(is_deleted, 0)
+                FROM suppliers
+                """
+            ).fetchall()
+
+        exact_customer: tuple[int, str] | None = None
+        exact_any: tuple[int, str] | None = None
+        contains_customer: tuple[int, str] | None = None
+        for row in rows:
+            name = decode_db_text(row[1])
+            norm = _normalize_contractor_name(name)
+            if not norm:
+                continue
+            is_supplier = int(row[2] or 0)
+            is_deleted = int(row[3] or 0)
+            if is_deleted:
+                continue
+            pair = (int(row[0]), name.strip())
+            if norm == target:
+                if is_supplier == 0 and exact_customer is None:
+                    exact_customer = pair
+                if exact_any is None:
+                    exact_any = pair
+            elif target in norm and is_supplier == 0 and contains_customer is None:
+                contains_customer = pair
+
+        return exact_customer or exact_any or contains_customer
+
+    def list_customer_orders(
+        self,
+        customer_id: int,
+        *,
+        only_open: bool = False,
+        limit: int = 300,
+        with_items: bool = True,
+    ) -> list[TirikaOrder]:
+        where = [
+            "COALESCE(wb.is_deleted, 0) = 0",
+            "wb.record_type = ?",
+            "wb.contractor_id = ?",
+        ]
+        params: list[object] = [RETAIL_SALE_RECORD_TYPE, int(customer_id)]
+        if only_open:
+            where.append("COALESCE(wb.is_reserve, 0) = 1")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    wb.id,
+                    wb.waybill_date,
+                    wb.waybill_number,
+                    wb.comment,
+                    wb.cost,
+                    wb.paid,
+                    COALESCE(wb.is_reserve, 0),
+                    COALESCE(wb.reserve_until, 0),
+                    wb.display_string,
+                    COUNT(wi.id) AS item_count
+                FROM waybills wb
+                LEFT JOIN waybill_items wi
+                  ON wi.waybill_id = wb.id AND COALESCE(wi.is_deleted, 0) = 0
+                WHERE {" AND ".join(where)}
+                GROUP BY wb.id
+                ORDER BY wb.waybill_date DESC, wb.id DESC
+                LIMIT ?
+                """,
+                (*params, int(limit)),
+            ).fetchall()
+
+            orders: list[TirikaOrder] = []
+            for row in rows:
+                reserve_until_ts = int(row[7] or 0)
+                order = TirikaOrder(
+                    waybill_id=int(row[0]),
+                    waybill_date=datetime.fromtimestamp(int(row[1] or 0)),
+                    number=decode_db_text(row[2]).strip(),
+                    comment=decode_db_text(row[3]).strip(),
+                    cost=float(row[4] or 0.0),
+                    paid=float(row[5] or 0.0),
+                    is_reserve=bool(int(row[6] or 0)),
+                    reserve_until=(
+                        datetime.fromtimestamp(reserve_until_ts) if reserve_until_ts > 0 else None
+                    ),
+                    item_count=int(row[9] or 0),
+                    display=decode_db_text(row[8]).strip(),
+                )
+                orders.append(order)
+
+            if with_items and orders:
+                ids = [o.waybill_id for o in orders]
+                items_by_wb = self._load_order_items(conn, ids)
+                for order in orders:
+                    order.items = items_by_wb.get(order.waybill_id, [])
+
+        return orders
+
+    def _load_order_items(
+        self,
+        conn: sqlite3.Connection,
+        waybill_ids: list[int],
+    ) -> dict[int, list[TirikaOrderItem]]:
+        if not waybill_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in waybill_ids)
+        rows = conn.execute(
+            f"""
+            SELECT
+                wi.waybill_id,
+                wi.goods_id,
+                g.product_code,
+                g.name,
+                wi.quantity,
+                wi.price,
+                wi.comment
+            FROM waybill_items wi
+            LEFT JOIN goods g ON g.id = wi.goods_id
+            WHERE wi.waybill_id IN ({placeholders})
+              AND COALESCE(wi.is_deleted, 0) = 0
+            ORDER BY wi.waybill_id, wi.id
+            """,
+            tuple(int(x) for x in waybill_ids),
+        ).fetchall()
+        out: dict[int, list[TirikaOrderItem]] = {}
+        for row in rows:
+            wb_id = int(row[0])
+            out.setdefault(wb_id, []).append(
+                TirikaOrderItem(
+                    good_id=int(row[1] or 0),
+                    product_code=decode_db_text(row[2]).strip(),
+                    name=decode_db_text(row[3]).strip(),
+                    quantity=float(row[4] or 0.0),
+                    price=float(row[5] or 0.0),
+                    comment=decode_db_text(row[6]).strip(),
+                )
+            )
+        return out
 
     def load_goods_catalog(self, shop_id: int) -> dict[int, GoodRecord]:
         catalog: dict[int, GoodRecord] = {}
@@ -1875,6 +2053,16 @@ def _format_amount_ru(value: float) -> str:
     return normalized
 
 
+def _normalize_contractor_name(value: str) -> str:
+    """Имя контрагента без пробелов и в верхнем регистре.
+
+    « З А К А З» -> «ЗАКАЗ», что позволяет надёжно находить покупателя заказов
+    в разных базах, где имя может быть записано по-разному.
+    """
+    text = decode_db_text(value) if not isinstance(value, str) else value
+    return "".join(text.split()).upper()
+
+
 def normalize_article(value: str) -> str:
     clean = value.strip()
     if not clean:
@@ -1885,7 +2073,7 @@ def normalize_article(value: str) -> str:
     clean = clean.replace("_", "")
     for prefix in ("XMIL", "XZK"):
         if clean.startswith(prefix):
-            clean = clean[len(prefix) :]
+            clean = clean[len(prefix):]
             break
     return clean[:20]
 
@@ -1912,4 +2100,3 @@ def calculate_suggested_sell_price(
     base = max(0.0, float(buy_price))
     marked = base * (1.0 + (markup_percent / 100.0))
     return round_up_to_step(marked, round_step)
-

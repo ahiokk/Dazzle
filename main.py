@@ -73,6 +73,12 @@ def ensure_admin() -> None:
 
 
 def main() -> int:
+    from tirika_importer.logging_setup import setup_logging, get_logger
+    from tirika_importer.version import APP_VERSION
+
+    log_path = setup_logging()
+    get_logger().info("Запуск Dazzle %s (лог: %s)", APP_VERSION, log_path)
+
     ensure_admin()
     app = QApplication(sys.argv)
     window = MainWindow()

@@ -403,7 +403,14 @@ def _read_excel_matrix(path: Path) -> list[list[Any]]:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             df = pd.read_excel(path, header=None)
         return [[v for v in row] for row in df.itertuples(index=False, name=None)]
+    except (MemoryError, SystemError):
+        # Do not silently swallow these — they indicate a serious problem
+        # that the COM fallback cannot fix and that the caller must see.
+        raise
     except Exception:
+        # pandas/xlrd/openpyxl raise a wide variety of types depending on
+        # the format (BadZipFile, XLRDError, ValueError, KeyError, ...).
+        # Keep the broad catch but exclude MemoryError/SystemError above.
         return _read_excel_matrix_via_com(path)
 
 
@@ -416,6 +423,8 @@ def _read_excel_table(path: Path) -> ParsedTable:
         headers = [str(c).strip() for c in df.columns]
         rows = [[v for v in row] for row in df.itertuples(index=False, name=None)]
         return ParsedTable(headers=headers, rows=rows)
+    except (MemoryError, SystemError):
+        raise
     except Exception:
         pass
 
@@ -680,13 +689,21 @@ def _extract_invoice_header(text: str) -> tuple[str, datetime | None]:
     if m_number:
         number = m_number.group(1).strip()
 
-    m_date = re.search(r"от\s*([0-3]?\d/[0-1]?\d/[12]\d{3})", text, re.IGNORECASE)
+    # Accept the common Russian separators: '/', '.', '-'.
+    # Mikado historically prints dd/mm/yyyy, but other senders use dd.mm.yyyy.
+    m_date = re.search(
+        r"от\s*([0-3]?\d[./-][0-1]?\d[./-][12]\d{3})",
+        text,
+        re.IGNORECASE,
+    )
     if m_date:
         raw_date = m_date.group(1).strip()
-        try:
-            date_value = datetime.strptime(raw_date, "%d/%m/%Y")
-        except ValueError:
-            date_value = None
+        for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y"):
+            try:
+                date_value = datetime.strptime(raw_date, fmt)
+                break
+            except ValueError:
+                continue
     return number, date_value
 
 

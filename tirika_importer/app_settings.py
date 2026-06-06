@@ -59,11 +59,15 @@ class AppSettings:
     backup_before_import: bool = True
     prefix_new_goods_with_order: bool = True
     article_match_field: str = field(default_factory=default_article_match_field)
-    table_layout_version: int = 2
+    table_layout_version: int = 3
     table_header_state: str = ""
     update_manifest_url: str = field(default_factory=default_update_manifest_url)
     auto_check_updates: bool = True
     ignored_update_version: str = ""
+    # Заказы и напоминания
+    order_customer_name: str = ""  # пусто => автоопределение контрагента «ЗАКАЗ»
+    orders_notify_on_startup: bool = True
+    orders_show_completed: bool = False
 
 
 def settings_file_path() -> Path:
@@ -172,6 +176,13 @@ def load_app_settings() -> AppSettings:
         ),
         auto_check_updates=_to_bool(raw.get("auto_check_updates"), defaults.auto_check_updates),
         ignored_update_version=str(raw.get("ignored_update_version", defaults.ignored_update_version) or ""),
+        order_customer_name=str(raw.get("order_customer_name", defaults.order_customer_name) or ""),
+        orders_notify_on_startup=_to_bool(
+            raw.get("orders_notify_on_startup"), defaults.orders_notify_on_startup
+        ),
+        orders_show_completed=_to_bool(
+            raw.get("orders_show_completed"), defaults.orders_show_completed
+        ),
     )
 
 

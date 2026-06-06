@@ -24,6 +24,15 @@ tmp_shop_for_test.db
 *.bak
 db_examples/
 
+# Scratch / local data dumps (never commit business data or RE logs)
+__sync_test.txt
+all_articles_from_db.txt
+primary_articles_unique.txt
+primary_articles_with_name_manufacturer_sorted.json
+frida_test_log.txt
+*.part
+/Tirika Shop/
+
 # OS/editor
 .DS_Store
 Thumbs.db

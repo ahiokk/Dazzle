@@ -1,0 +1,3 @@
+# Dev/test dependencies (НЕ бандлятся в приложение, см. excludes в .spec)
+-r requirements.txt
+pytest>=8.0

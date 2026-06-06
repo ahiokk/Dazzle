@@ -27,6 +27,26 @@ class UpdateInfo:
     release_page_url: str = ""
 
 
+# Установщик принимаем только с доверенных хостов по HTTPS (цепочка релизов на GitHub).
+_TRUSTED_HOST_SUFFIXES = ("github.com", "githubusercontent.com")
+
+
+def _is_trusted_installer_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme.lower() != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return any(host == s or host.endswith("." + s) for s in _TRUSTED_HOST_SUFFIXES)
+
+
+def _is_valid_sha256(value: str) -> bool:
+    v = (value or "").strip().lower()
+    return len(v) == 64 and all(c in "0123456789abcdef" for c in v)
+
+
 def check_for_update(current_version: str, manifest_url: str, timeout_sec: float = 20.0) -> UpdateInfo | None:
     url = manifest_url.strip()
     if not url:
@@ -39,10 +59,21 @@ def check_for_update(current_version: str, manifest_url: str, timeout_sec: float
         raise UpdateError("В manifest нет обязательных полей: version и url.")
 
     installer_url = urljoin(url, installer_url_raw)
+    if not _is_trusted_installer_url(installer_url):
+        raise UpdateError(
+            "URL установщика не на доверенном хосте (ожидается github.com / "
+            f"githubusercontent.com по HTTPS): {installer_url}"
+        )
+    sha256 = str(manifest.get("sha256", "")).strip().lower()
+    if not _is_valid_sha256(sha256):
+        raise UpdateError(
+            "В manifest нет корректного sha256 установщика — обновление отклонено "
+            "в целях безопасности. Добавьте поле sha256 (64 hex) в latest.json."
+        )
     info = UpdateInfo(
         version=version,
         installer_url=installer_url,
-        sha256=str(manifest.get("sha256", "")).strip().lower(),
+        sha256=sha256,
         notes=str(manifest.get("notes", "")).strip(),
         release_page_url=str(manifest.get("release_page_url", "")).strip(),
     )
@@ -92,14 +123,16 @@ def download_installer(
     if last_exc is not None:
         raise UpdateError(f"Не удалось скачать обновление: {last_exc}") from last_exc
 
-    if update.sha256:
-        actual = sha256_file(temp_path)
-        if actual.lower() != update.sha256.lower():
-            temp_path.unlink(missing_ok=True)
-            raise UpdateError(
-                "Проверка SHA256 не пройдена. "
-                f"Ожидался: {update.sha256}, получен: {actual}."
-            )
+    if not _is_valid_sha256(update.sha256):
+        temp_path.unlink(missing_ok=True)
+        raise UpdateError("Обновление без корректного sha256 отклонено в целях безопасности.")
+    actual = sha256_file(temp_path)
+    if actual.lower() != update.sha256.lower():
+        temp_path.unlink(missing_ok=True)
+        raise UpdateError(
+            "Проверка SHA256 не пройдена. "
+            f"Ожидался: {update.sha256}, получен: {actual}."
+        )
 
     if final_path.exists():
         final_path.unlink(missing_ok=True)
@@ -138,7 +171,12 @@ def sha256_file(path: Path) -> str:
 
 
 def is_newer_version(candidate: str, current: str) -> bool:
-    return _version_tuple(candidate) > _version_tuple(current)
+    a = _version_tuple(candidate)
+    b = _version_tuple(current)
+    width = max(len(a), len(b))
+    a = a + (0,) * (width - len(a))
+    b = b + (0,) * (width - len(b))
+    return a > b
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:

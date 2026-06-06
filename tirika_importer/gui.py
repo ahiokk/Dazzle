@@ -31,6 +31,7 @@ from .models import (
     ParsedInvoice,
     ParsedOzonCsv,
 )
+from .orders_gui import OrdersWidget
 from .ozon import OzonParseError, match_ozon_lines, parse_ozon_csv, recalculate_ozon_prices
 from .parsers import InvoiceParseError, parse_invoice_file
 from .qt_compat import (
@@ -47,6 +48,7 @@ from .qt_compat import (
     QFileDialog,
     QFontMetrics,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHeaderView,
@@ -84,6 +86,7 @@ from .qt_compat import (
     Signal,
     qt_exec,
 )
+from .logging_setup import get_logger
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
 from .version import APP_NAME, APP_VERSION, display_app_title
@@ -115,6 +118,21 @@ DB_ONLY_COLUMNS = (
     COL_METHOD,
 )
 
+# Колонки с числами/кодами — моноширинный шрифт для выравнивания по разрядам.
+MONO_COLUMNS = (
+    COL_LINE,
+    COL_ARTICLE,
+    COL_QTY,
+    COL_BUY_PRICE,
+    COL_SUM,
+    COL_SELL_PRICE,
+    COL_SELL_PRICE_OLD,
+    COL_SELL_DIFF,
+    COL_MARKUP,
+    COL_GOOD_ID,
+    COL_GOOD_CODE,
+)
+
 MAX_HISTORY_STATES = 80
 ROLE_SELL_DB_OLD_PRICE = Qt.UserRole + 101
 
@@ -142,306 +160,219 @@ PAYMENT_OPTIONS: tuple[tuple[str, int], ...] = (
 
 
 APP_STYLESHEET = """
-QWidget {
-    background: #f4f6fb;
-    color: #1f2a37;
-    font-family: Segoe UI;
-    font-size: 10pt;
-}
-QMainWindow {
-    background: #eef2f9;
-}
+/* Dazzle — Refined Blue (light), density-tuned for the 16-column invoice table */
+
+QWidget { background:#E9EEF6; color:#1E293B; font-family:'Segoe UI'; font-size:10pt; }
+QMainWindow { background:#E9EEF6; }
+QLabel { background:transparent; }
+
+/* Cards */
 QFrame#topCard, QFrame#logCard {
-    background: #ffffff;
-    border: 1px solid #d7e0ec;
-    border-radius: 8px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:1 #FBFCFE);
+    border:1px solid #D8E1EF; border-radius:12px;
 }
-QLabel#titleLabel {
-    font-size: 16pt;
-    font-weight: 700;
-    color: #0f172a;
-}
-QLabel#subtitleLabel {
-    color: #475569;
-    font-size: 10pt;
-}
+
+/* Header */
+QLabel#titleLabel { font-size:17pt; font-weight:800; color:#0F1B3D; }
+QLabel#subtitleLabel { color:#64748B; font-size:9.5pt; }
+
+/* Totals chip */
 QLabel#totalsPill {
-    color: #1e3a8a;
-    font-size: 10pt;
-    font-weight: 600;
-    background: #f3f6fb;
-    border: 1px solid #d7e0ec;
-    border-radius: 7px;
-    padding: 4px 9px;
+    color:#1E40AF; font-weight:700;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #EEF3FE, stop:1 #E3ECFC);
+    border:1px solid #CBD9F6; border-radius:9px; padding:6px 12px;
 }
-QLabel[pill="true"] {
-    font-size: 9.5pt;
-    font-weight: 600;
-    border-radius: 7px;
-    padding: 4px 9px;
+
+/* Footer status pills */
+QLabel[pill="true"] { font-size:9.5pt; font-weight:700; border-radius:8px; padding:5px 12px; }
+QLabel[pill="true"][tone="found"]     { color:#15803D; background:#E7F6EE; border:1px solid #BFE6CD; }
+QLabel[pill="true"][tone="ambiguous"] { color:#1E40AF; background:#E9EFFC; border:1px solid #C6D6F5; }
+QLabel[pill="true"][tone="missing"]   { color:#B42318; background:#FCECEC; border:1px solid #F3C9C5; }
+QLabel[pill="true"][tone="warning"]   { color:#92560A; background:#FDF4E2; border:1px solid #EFD9A6; }
+
+/* Inputs */
+QLineEdit, QComboBox, QPlainTextEdit {
+    background:#FFFFFF; border:1px solid #CBD6E6; border-radius:8px; padding:5px 10px;
+    selection-background-color:#1E40AF; selection-color:#FFFFFF;
 }
-QLabel[pill="true"][tone="found"] {
-    color: #21593a;
-    background: #edf8f0;
-    border: 1px solid #cce6d5;
-}
-QLabel[pill="true"][tone="ambiguous"] {
-    color: #334155;
-    background: #f1f5fb;
-    border: 1px solid #d8e0ee;
-}
-QLabel[pill="true"][tone="missing"] {
-    color: #7f1d1d;
-    background: #fdf1f1;
-    border: 1px solid #efcaca;
-}
-QLabel[pill="true"][tone="warning"] {
-    color: #6b5315;
-    background: #fdf9ec;
-    border: 1px solid #e8ddbe;
-}
-QLineEdit, QComboBox, QPlainTextEdit, QTableWidget {
-    background: #ffffff;
-    border: 1px solid #c7d3e3;
-    border-radius: 7px;
-    padding: 6px 8px;
-}
-QLineEdit, QComboBox {
-    min-height: 32px;
-}
-QLineEdit:focus, QComboBox:focus, QTableWidget:focus, QPlainTextEdit:focus {
-    border: 1px solid #3b82f6;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 20px;
-}
-QTableWidget QComboBox {
-    min-height: 24px;
-    max-height: 24px;
-    padding: 2px 6px;
-    border-radius: 6px;
-    background: #ffffff;
-}
-QTableWidget QComboBox[actionKind="import"] {
-    background: #ffffff;
-    color: #0f172a;
-    border: 1px solid #c7d3e3;
-}
-QTableWidget QComboBox[actionKind="create"] {
-    background: #eaf2ff;
-    color: #1e3a8a;
-    border: 1px solid #b8ccf0;
-}
-QTableWidget QComboBox[actionKind="skip"] {
-    background: #fdf1f1;
-    color: #7f1d1d;
-    border: 1px solid #efcaca;
-}
-QTableWidget QComboBox::drop-down {
-    width: 16px;
-}
-QTableWidget QComboBox QAbstractItemView::item {
-    min-height: 20px;
-}
+QLineEdit, QComboBox { min-height:32px; }
+QLineEdit:hover, QComboBox:hover { border-color:#A9BEDE; }
+QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus { border:2px solid #2563EB; padding:4px 9px; }
+QComboBox::drop-down { border:none; width:22px; subcontrol-position:center right; }
+QComboBox::down-arrow { image:url(__ASSET_DIR__/chevron-down.svg); width:11px; height:11px; }
+
+/* Buttons */
 QPushButton {
-    background: #e6edf8;
-    color: #0f172a;
-    border: 1px solid #c7d3e3;
-    border-radius: 7px;
-    padding: 6px 12px;
-    min-height: 32px;
-    font-weight: 600;
+    background:#FFFFFF; color:#1E293B; border:1px solid #CBD6E6; border-radius:8px;
+    padding:6px 14px; min-height:32px; font-weight:600;
 }
-QPushButton:hover {
-    background: #dbe7f8;
-}
+QPushButton:hover { background:#F2F6FC; border-color:#A9BEDE; }
+QPushButton:pressed { background:#E8EFF8; }
+QPushButton:disabled { background:#F2F4F8; color:#9AA7BC; border-color:#DDE4EF; }
 QPushButton#primaryBtn {
-    background: #2563eb;
-    color: #ffffff;
-    border: 1px solid #1f56cd;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2563EB, stop:1 #1E40AF);
+    color:#FFFFFF; border:1px solid #1B3A98;
 }
-QPushButton#primaryBtn:hover {
-    background: #1d4ed8;
-}
+QPushButton#primaryBtn:hover { background:#1E40AF; }
+QPushButton#primaryBtn:pressed { background:#18337F; }
+QPushButton#primaryBtn:disabled { background:#9CB4E8; border-color:#9CB4E8; color:#EAF0FB; }
 QPushButton#successBtn {
-    background: #2f855a;
-    color: #ffffff;
-    border: 1px solid #276749;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #16A34A, stop:1 #128041);
+    color:#FFFFFF; border:1px solid #0F7037;
 }
-QPushButton#successBtn:hover {
-    background: #276749;
-}
-QPushButton#subtleBtn {
-    background: #f8fafc;
-    color: #334155;
-    border: 1px solid #d7e0ec;
-}
-QPushButton#subtleBtn:hover {
-    background: #eef3fa;
-}
-QGroupBox {
-    border: 1px solid #dbe3ef;
-    border-radius: 8px;
-    margin-top: 10px;
-    padding-top: 8px;
-    background: #fbfcff;
-    font-weight: 600;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 4px;
-    color: #334155;
-}
-QTabWidget::pane {
-    border: 1px solid #d2ddec;
-    border-radius: 10px;
-    background: #ffffff;
-    top: -1px;
-}
+QPushButton#successBtn:hover { background:#128041; }
+QPushButton#successBtn:pressed { background:#0E6334; }
+QPushButton#subtleBtn { background:#F4F7FC; color:#334155; border:1px solid #D8E1EF; }
+QPushButton#subtleBtn:hover { background:#EAF1FA; border-color:#C2D2EA; }
+
+/* Tabs */
+QTabWidget::pane { border:1px solid #D8E1EF; border-radius:12px; background:#FFFFFF; top:-1px; }
 QTabBar::tab {
-    background: #e9eff9;
-    border: 1px solid #c6d4e8;
-    color: #334155;
-    padding: 8px 14px;
-    margin-right: 6px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-    font-weight: 600;
+    background:#E7EDF7; color:#43546E; border:1px solid #D2DDEC; border-bottom:none;
+    padding:8px 18px; margin-right:6px;
+    border-top-left-radius:9px; border-top-right-radius:9px; font-weight:600;
 }
 QTabBar::tab:selected {
-    background: #2563eb;
-    border: 1px solid #1f56cd;
-    color: #ffffff;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2563EB, stop:1 #1E40AF);
+    color:#FFFFFF; border:1px solid #1B3A98;
 }
-QTabBar::tab:hover:!selected {
-    background: #dbe7f8;
-    color: #1e3a8a;
-}
-QHeaderView::section {
-    background: #eff4fb;
-    color: #1e293b;
-    border: 0;
-    border-right: 1px solid #d3deec;
-    border-bottom: 1px solid #cbd6e4;
-    padding: 7px 6px;
-    font-weight: 700;
-}
+QTabBar::tab:hover:!selected { background:#DCE6F6; color:#1E40AF; }
+
+/* Table — dense */
 QTableWidget {
-    gridline-color: #e2e8f0;
-    alternate-background-color: #f8fbff;
-    selection-background-color: #dbeafe;
-    selection-color: #0f172a;
+    background:#FFFFFF; border:1px solid #D8E1EF; border-radius:10px;
+    gridline-color:#EDF1F8;
+    alternate-background-color:#F7FAFD;
+    selection-background-color:#DCE8FF; selection-color:#0F1B3D;
+    font-size:9pt;
 }
-QCheckBox {
-    spacing: 8px;
+QTableWidget::item { padding:0px 5px; }
+QHeaderView::section {
+    background:#EAF0FA; color:#34507F;
+    border:0; border-right:1px solid #DEE6F2; border-bottom:2px solid #CBD9F0;
+    padding:6px 6px; font-weight:700; font-size:8.5pt;
 }
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
+QHeaderView::section:last { border-right:0; }
+QTableCornerButton::section { background:#EAF0FA; border:0; }
+
+/* In-table action combos */
+QTableWidget QComboBox {
+    min-height:24px; max-height:24px; padding:1px 6px; border-radius:6px; font-weight:600; font-size:8.5pt;
 }
-QCheckBox::indicator:unchecked {
-    border: 1px solid #9fb0c8;
-    border-radius: 4px;
-    background: #ffffff;
-}
+QTableWidget QComboBox::drop-down { width:16px; }
+QTableWidget QComboBox[actionKind="import"] { background:#E7F6EE; color:#15803D; border:1px solid #BFE6CD; }
+QTableWidget QComboBox[actionKind="create"] { background:#E9EFFC; color:#1E40AF; border:1px solid #C6D6F5; }
+QTableWidget QComboBox[actionKind="skip"]   { background:#F1F4F9; color:#64748B; border:1px solid #D6DEEA; }
+
+/* Checkbox */
+QCheckBox { spacing:8px; color:#334155; background:transparent; }
+QCheckBox::indicator { width:18px; height:18px; }
+QCheckBox::indicator:unchecked { border:1px solid #A9BAD2; border-radius:5px; background:#FFFFFF; }
+QCheckBox::indicator:hover { border-color:#2563EB; }
 QCheckBox::indicator:checked {
-    border: 1px solid #2563eb;
-    border-radius: 4px;
-    background: #2563eb;
+    border:1px solid #1E40AF; border-radius:5px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2563EB, stop:1 #1E40AF);
 }
-QToolButton#helpBtn {
-    background: #eef4ff;
-    color: #1d4ed8;
-    border: 1px solid #9db5df;
-    border-radius: 9px;
-    font-weight: 700;
-    padding: 0;
-}
-QToolButton#helpBtn:hover {
-    background: #dce9ff;
-}
+
+/* Tool buttons */
+QToolButton#helpBtn { background:#EAF0FB; color:#1E40AF; border:1px solid #C6D6F5; border-radius:14px; font-weight:800; }
+QToolButton#helpBtn:hover { background:#DCE6F8; }
 QToolButton#debugToggleBtn {
-    background: #eef3fa;
-    border: 1px solid #9fb0c8;
-    border-radius: 7px;
-    color: #1e3a8a;
-    font-size: 9pt;
-    font-weight: 700;
-    padding: 0 4px;
+    background:#EFF3F9; border:1px solid #CBD6E6; border-radius:8px; color:#1E40AF;
+    font-size:9pt; font-weight:700; padding:0 10px;
 }
-QToolButton#debugToggleBtn:checked {
-    background: #2563eb;
-    border: 1px solid #1f56cd;
-    color: #ffffff;
-}
-QFrame#resultHeader {
-    background: #f8fbff;
-    border: 1px solid #d5e3f7;
-    border-radius: 10px;
-}
-QLabel#resultStateOk {
-    background: #dcfce7;
-    color: #166534;
-    border: 1px solid #86efac;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-weight: 700;
-}
-QLabel#resultStateDry {
-    background: #dbeafe;
-    color: #1d4ed8;
-    border: 1px solid #93c5fd;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-weight: 700;
-}
-QFrame#metricCard {
-    background: #ffffff;
-    border: 1px solid #d8e3f1;
-    border-radius: 10px;
-}
-QLabel#metricTitle {
-    color: #64748b;
-    font-size: 9pt;
-}
-QLabel#metricValue {
-    color: #0f172a;
-    font-size: 14pt;
-    font-weight: 700;
-}
-QListWidget#warningsList {
-    background: #ffffff;
-    border: 1px solid #c7d3e3;
-    border-radius: 8px;
-    padding: 4px;
-}
-QLabel#resultTagImport {
-    background: #dcfce7;
-    color: #14532d;
-    border: 1px solid #86efac;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-weight: 700;
-}
-QLabel#resultTagSkip {
-    background: #eef2f7;
-    color: #334155;
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-weight: 700;
-}
-QLabel#resultTagCreate {
-    background: #e0ecff;
-    color: #1e3a8a;
-    border: 1px solid #9ab8ea;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-weight: 700;
-}
-"""
+QToolButton#debugToggleBtn:checked { background:#1E40AF; border:1px solid #1B3A98; color:#FFFFFF; }
+
+/* Result / metrics / ozon (used in dialogs and other tabs) */
+QFrame#resultHeader { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FBFCFE, stop:1 #F3F7FE); border:1px solid #D8E1EF; border-radius:12px; }
+QLabel#resultStateOk { background:#E7F6EE; color:#15803D; border:1px solid #BFE6CD; border-radius:9px; padding:8px 14px; font-weight:800; }
+QLabel#resultStateDry { background:#E9EFFC; color:#1E40AF; border:1px solid #C6D6F5; border-radius:9px; padding:8px 14px; font-weight:800; }
+QFrame#metricCard { background:#FFFFFF; border:1px solid #DCE5F1; border-top:2px solid #2563EB; border-radius:10px; }
+QLabel#metricTitle { color:#64748B; font-size:8.5pt; font-weight:600; background:transparent; }
+QLabel#metricValue { color:#0F1B3D; font-size:18pt; font-weight:800; background:transparent; }
+QLabel#resultTagImport { background:#E7F6EE; color:#15803D; border:1px solid #BFE6CD; border-radius:8px; padding:6px 12px; font-weight:700; }
+QLabel#resultTagCreate { background:#E9EFFC; color:#1E40AF; border:1px solid #C6D6F5; border-radius:8px; padding:6px 12px; font-weight:700; }
+QLabel#resultTagSkip   { background:#F1F4F9; color:#64748B; border:1px solid #D6DEEA; border-radius:8px; padding:6px 12px; font-weight:700; }
+QListWidget#warningsList { background:#FFFFFF; border:1px solid #D8E1EF; border-radius:10px; padding:6px; }
+QListWidget#warningsList::item { padding:7px 8px; border-radius:6px; color:#334155; }
+QListWidget#warningsList::item:hover { background:#F2F6FC; }
+QListWidget#warningsList::item:selected { background:#DCE8FF; color:#0F1B3D; }
+QGroupBox { border:1px solid #DCE5F1; border-radius:10px; margin-top:10px; padding-top:10px; background:#FAFCFE; font-weight:700; color:#34507F; }
+QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; color:#34507F; }
+QFrame#ozonSteps { background:#F4F8FE; border:1px solid #D8E4F6; border-radius:10px; }
+QLabel#ozonStep { color:#334155; }
+
+/* Scrollbars */
+QScrollBar:vertical { background:transparent; width:12px; margin:2px; }
+QScrollBar::handle:vertical { background:#C2CEE0; border-radius:5px; min-height:32px; }
+QScrollBar::handle:vertical:hover { background:#9FB2D0; }
+QScrollBar:horizontal { background:transparent; height:12px; margin:2px; }
+QScrollBar::handle:horizontal { background:#C2CEE0; border-radius:5px; min-width:32px; }
+QScrollBar::handle:horizontal:hover { background:#9FB2D0; }
+QScrollBar::add-line, QScrollBar::sub-line { width:0; height:0; background:none; border:none; }
+QScrollBar::add-page, QScrollBar::sub-page { background:transparent; }
+""".replace("__ASSET_DIR__", Path(__file__).resolve().parent.parent.as_posix())
+
+
+class ToastNotification(QWidget):
+    """Тихое уведомление в стиле Windows — справа снизу, само исчезает."""
+
+    def __init__(self, title, message, *, timeout_ms=9000, on_click=None):
+        super().__init__(None)
+        self._on_click = on_click
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setObjectName("toast")
+        self.setStyleSheet(
+            "QWidget#toast{background:#0f172a;border:1px solid #334155;border-radius:12px;}"
+            "QLabel#toastTitle{color:#ffffff;font-size:11pt;font-weight:700;}"
+            "QLabel#toastMsg{color:#cbd5e1;font-size:10pt;}"
+            "QToolButton#toastClose{color:#94a3b8;border:none;font-size:12pt;font-weight:700;}"
+            "QToolButton#toastClose:hover{color:#ffffff;}"
+        )
+        wrap = QVBoxLayout(self)
+        wrap.setContentsMargins(16, 12, 14, 14)
+        wrap.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title_lbl = QLabel(title, self)
+        title_lbl.setObjectName("toastTitle")
+        head.addWidget(title_lbl, 1)
+        close_btn = QToolButton(self)
+        close_btn.setObjectName("toastClose")
+        close_btn.setText("✕")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        head.addWidget(close_btn, 0, Qt.AlignTop)
+        wrap.addLayout(head)
+        msg_lbl = QLabel(message, self)
+        msg_lbl.setObjectName("toastMsg")
+        msg_lbl.setWordWrap(True)
+        wrap.addWidget(msg_lbl)
+        self.setFixedWidth(340)
+        self.adjustSize()
+        QTimer.singleShot(int(timeout_ms), self.close)
+
+    def _place(self):
+        try:
+            geo = QApplication.primaryScreen().availableGeometry()
+            self.move(geo.right() - self.width() - 18, geo.bottom() - self.height() - 18)
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        self._place()
+        super().showEvent(event)
+
+    def mousePressEvent(self, event):
+        cb = self._on_click
+        if callable(cb):
+            try:
+                cb()
+            except Exception:
+                pass
+        self.close()
 
 
 class UpdateDownloadWorker(QObject):
@@ -1795,6 +1726,26 @@ class OzonDialog(QDialog):
                 return
 
 
+class OzonPanel(OzonDialog):
+    """Встраиваемый во вкладку вариант окна Ozon (без модального закрытия)."""
+
+    def __init__(self, *args, on_imported=None, **kwargs):
+        self._on_imported_cb = on_imported
+        super().__init__(*args, **kwargs)
+        self.setWindowFlags(Qt.Widget)
+        close_btn = getattr(self, "close_btn", None)
+        if close_btn is not None:
+            close_btn.setVisible(False)
+
+    def accept(self):
+        cb = getattr(self, "_on_imported_cb", None)
+        if callable(cb):
+            cb()
+
+    def reject(self):
+        pass
+
+
 class SettingsDialog(QDialog):
     check_updates_requested = Signal(str)
 
@@ -2277,6 +2228,8 @@ class MainWindow(QMainWindow):
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
         self._ui_busy_counter = 0
+        self._orders_startup_notified = False
+        self._orders_tab_index = 1
 
         self._build_ui()
         self._apply_styles()
@@ -2308,8 +2261,8 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
         header_card = QFrame(self)
         header_card.setObjectName("topCard")
@@ -2344,6 +2297,7 @@ class MainWindow(QMainWindow):
         self.ozon_btn.setMinimumWidth(118)
         self.ozon_btn.setMinimumHeight(32)
         self.ozon_btn.setToolTip("Отдельный режим: перемещение товаров на склад ОЗОН и продажа по CSV Ozon.")
+        self.ozon_btn.setVisible(False)  # Ozon теперь встроен во вкладку, отдельная кнопка не нужна
 
         self.settings_btn = QPushButton("Настройки", self)
         self.settings_btn.setObjectName("subtleBtn")
@@ -2353,13 +2307,20 @@ class MainWindow(QMainWindow):
             "Открывает постоянные настройки: база, папка накладных, параметры импорта и автозапуск."
         )
         header_layout.addWidget(self.debug_toggle_btn, 0, Qt.AlignVCenter)
-        header_layout.addWidget(self.ozon_btn, 0, Qt.AlignVCenter)
         header_layout.addWidget(self.settings_btn, 0, Qt.AlignVCenter)
 
         # Internal status holder (not shown in compact workspace).
         self.db_state_label = QLabel("БД: не подключена", self)
         self.db_state_label.setVisible(False)
+        self._add_card_shadow(header_card)
         root.addWidget(header_card)
+
+        # Главный интерфейс — вкладки: «Накладные» | «Заказы и напоминания» | «Ozon».
+        self.main_tabs = QTabWidget(self)
+        invoice_tab = QWidget()
+        invoice_layout = QVBoxLayout(invoice_tab)
+        invoice_layout.setContentsMargins(0, 0, 0, 0)
+        invoice_layout.setSpacing(6)
 
         controls_card = QFrame(self)
         controls_card.setObjectName("topCard")
@@ -2471,7 +2432,8 @@ class MainWindow(QMainWindow):
         # Keep text sink for legacy status updates, hidden in compact layout.
         self.supplier_detect_label = QLabel("Автоопределение поставщика: ожидается загрузка накладной", self)
         self.supplier_detect_label.setVisible(False)
-        root.addWidget(controls_card)
+        self._add_card_shadow(controls_card)
+        invoice_layout.addWidget(controls_card)
 
         # Постоянные параметры импорта скрыты с главного экрана и настраиваются в диалоге "Настройки".
         self.user_combo = QComboBox()
@@ -2492,19 +2454,19 @@ class MainWindow(QMainWindow):
             [
                 "№",
                 "Артикул",
-                "Название из накладной",
+                "Название",
                 "Примечание",
                 "Кол-во",
                 "Закуп",
                 "Сумма",
-                "Продажа (Новая)",
-                "Продажа (БД)",
-                "Δ, %",
-                "Наценка, %",
+                "Продажа новая",
+                "Продажа БД",
+                "Δ %",
+                "Наценка %",
                 "Статус",
                 "Действие",
                 "Good ID",
-                "Код в БД",
+                "Код БД",
                 "Товар в БД",
                 "Похожие артикулы",
                 "Метод",
@@ -2548,7 +2510,7 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 8)
         self.splitter.setStretchFactor(1, 2)
         self.splitter.setSizes([640, 190])
-        root.addWidget(self.splitter, 1)
+        invoice_layout.addWidget(self.splitter, 1)
 
         footer_card = QFrame(self)
         footer_card.setObjectName("topCard")
@@ -2596,7 +2558,19 @@ class MainWindow(QMainWindow):
         self.import_btn.setMaximumWidth(200)
         self.import_btn.setToolTip("Выполняет реальную запись накладной в базу Tirika.")
         footer_layout.addWidget(self.import_btn)
-        root.addWidget(footer_card)
+        self._add_card_shadow(footer_card)
+        invoice_layout.addWidget(footer_card)
+
+        # Сборка вкладок
+        self.main_tabs.addTab(invoice_tab, "Накладные")
+        self.orders_widget = OrdersWidget(self)
+        self._orders_tab_index = self.main_tabs.addTab(
+            self.orders_widget, "Заказы и напоминания"
+        )
+        self.ozon_tab = self._build_ozon_tab()
+        self.main_tabs.addTab(self.ozon_tab, "Ozon")
+        root.addWidget(self.main_tabs, 1)
+        self.main_tabs.currentChanged.connect(lambda _i: self._ensure_ozon_panel())
 
         self.settings_btn.clicked.connect(self._open_settings_dialog)
         self.ozon_btn.clicked.connect(self._open_ozon_dialog)
@@ -2618,6 +2592,8 @@ class MainWindow(QMainWindow):
         self._set_debug_log_enabled(False)
         self._restore_table_header_state()
         self._update_history_buttons()
+        # Показать ручные напоминания сразу (заказы Tirika подтянутся после открытия БД).
+        self.orders_widget.refresh()
 
     def _load_initial_config(self) -> None:
         cfg = load_config()
@@ -2636,11 +2612,21 @@ class MainWindow(QMainWindow):
         else:
             self._log("Укажите путь к базе в настройках и загрузите накладную.")
             self._set_ui_busy(False)
+            self._refresh_orders_after_db()
         if self.app_settings.auto_check_updates:
             QTimer.singleShot(1200, lambda: self._check_for_updates(interactive=False))
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(APP_STYLESHEET)
+
+    def _add_card_shadow(self, widget) -> None:
+        """Мягкая тень-elevation: карточка слегка «приподнята» над фоном."""
+        effect = QGraphicsDropShadowEffect(widget)
+        effect.setBlurRadius(18)
+        effect.setXOffset(0)
+        effect.setYOffset(4)
+        effect.setColor(QColor(15, 27, 61, 30))
+        widget.setGraphicsEffect(effect)
 
     def _is_ui_busy(self) -> bool:
         return self._ui_busy_counter > 0
@@ -3157,6 +3143,116 @@ class MainWindow(QMainWindow):
         else:
             self._reload_catalog(run_matching_after=self.current_invoice is not None)
 
+    def _build_ozon_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._ozon_tab_layout = layout
+        self._ozon_panel = None
+        self.ozon_placeholder = QLabel(
+            "Подключите базу Tirika в «Настройках» — здесь появится импорт заказов Ozon из CSV.",
+            tab,
+        )
+        self.ozon_placeholder.setObjectName("subtitleLabel")
+        self.ozon_placeholder.setWordWrap(True)
+        self.ozon_placeholder.setAlignment(Qt.AlignCenter)
+        self.ozon_placeholder.setContentsMargins(20, 40, 20, 40)
+        layout.addWidget(self.ozon_placeholder)
+        layout.addStretch(1)
+        return tab
+
+    def _ensure_ozon_panel(self) -> None:
+        if getattr(self, "_ozon_panel", None) is not None:
+            return
+        if self.db is None or self.matcher is None:
+            return
+        if not (self.suppliers and self.users and self.shops):
+            try:
+                self.suppliers = self.db.list_suppliers()
+                self.users = self.db.list_users()
+                self.shops = self.db.list_shops()
+            except Exception:
+                return
+        try:
+            panel = OzonPanel(
+                db=self.db,
+                matcher=self.matcher,
+                app_settings=self.app_settings,
+                suppliers=self.suppliers,
+                users=self.users,
+                shops=self.shops,
+                parent=self,
+                on_imported=lambda: self._reload_catalog(
+                    run_matching_after=self.current_invoice is not None
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Ozon: не удалось встроить панель ({exc}).")
+            return
+        self._ozon_panel = panel
+        placeholder = getattr(self, "ozon_placeholder", None)
+        if placeholder is not None:
+            placeholder.setVisible(False)
+        self._ozon_tab_layout.addWidget(panel, 1)
+
+    def update_orders_badge(self) -> None:
+        widget = getattr(self, "orders_widget", None)
+        if widget is None or not hasattr(self, "main_tabs"):
+            return
+        try:
+            count = int(widget.badge_count())
+        except Exception:
+            count = 0
+        base = "Заказы и напоминания"
+        label = f"{base}  ({count})" if count else base
+        idx = getattr(self, "_orders_tab_index", -1)
+        if 0 <= idx < self.main_tabs.count():
+            self.main_tabs.setTabText(idx, label)
+
+    def _refresh_orders_after_db(self) -> None:
+        widget = getattr(self, "orders_widget", None)
+        if widget is None:
+            return
+        try:
+            widget.refresh()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Заказы: ошибка обновления ({exc}).")
+            return
+        self._ensure_ozon_panel()
+        if not self._orders_startup_notified and self.app_settings.orders_notify_on_startup:
+            self._orders_startup_notified = True
+            QTimer.singleShot(300, self._maybe_show_orders_startup_notification)
+
+    def _maybe_show_orders_startup_notification(self) -> None:
+        widget = getattr(self, "orders_widget", None)
+        if widget is None:
+            return
+        try:
+            summary = widget.compute_summary()
+        except Exception:
+            return
+        if not (summary["overdue"] or summary["today"] or summary["tirika_open"]):
+            return
+        parts = []
+        if summary["overdue"]:
+            parts.append(f"просрочено: {summary['overdue']}")
+        if summary["today"]:
+            parts.append(f"на сегодня: {summary['today']}")
+        if summary["tirika_open"]:
+            parts.append(f"открытых заказов ЗАКАЗ: {summary['tirika_open']}")
+        message = "  ·  ".join(parts) + ".\nНажмите, чтобы открыть."
+        try:
+            toast = ToastNotification(
+                "Заказы и напоминания",
+                message,
+                on_click=lambda: self.main_tabs.setCurrentIndex(getattr(self, "_orders_tab_index", 1)),
+            )
+            self._active_toast = toast
+            toast.show()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Уведомление не показано ({exc}).")
+
     def _open_ozon_dialog(self) -> None:
         if self._is_ui_busy():
             return
@@ -3283,9 +3379,12 @@ class MainWindow(QMainWindow):
             self._log(f"Каталог загружен: {len(catalog)} товаров.")
             self.db_state_label.setText("БД: подключена")
             self.db_state_label.setToolTip(self.app_settings.db_path)
+            if hasattr(self, "ozon_tab_status") and self.ozon_tab_status is not None:
+                self.ozon_tab_status.setText("✓ База подключена — можно импортировать Ozon CSV.")
 
             if self.current_invoice is not None:
                 self._run_matching()
+            self._refresh_orders_after_db()
         except Exception as exc:
             self.db = None
             self.matcher = None
@@ -3354,6 +3453,7 @@ class MainWindow(QMainWindow):
             self._log(f"Каталог загружен: {len(catalog)} товаров.")
             if bool(data.get("run_matching_after", False)) and self.current_invoice is not None:
                 self._run_matching()
+            self._refresh_orders_after_db()
         except Exception as exc:
             self._error("Ошибка обработки каталога", exc=exc)
         finally:
@@ -3820,6 +3920,10 @@ class MainWindow(QMainWindow):
                 ]
                 for col, value in enumerate(values):
                     item = QTableWidgetItem(value)
+                    if col in MONO_COLUMNS:
+                        mono = item.font()
+                        mono.setFamily("Consolas")
+                        item.setFont(mono)
                     if col in {
                         COL_LINE,
                         COL_QTY,
@@ -3932,30 +4036,30 @@ class MainWindow(QMainWindow):
             self._table_locked = False
 
     def _apply_initial_column_widths(self, lines: list[InvoiceLine]) -> None:
-        if len(lines) <= 250:
-            self.table.resizeColumnsToContents()
-            return
-
+        # Подобранные ширины: рабочие колонки помещаются в окно без
+        # горизонтальной прокрутки. Длинный текст аккуратно обрезается «…»,
+        # а последняя видимая колонка тянется (stretchLastSection).
         widths = {
-            COL_LINE: 54,
-            COL_ARTICLE: 130,
-            COL_NAME: 300,
-            COL_NOTE: 150,
-            COL_QTY: 76,
-            COL_BUY_PRICE: 90,
-            COL_SUM: 96,
+            COL_LINE: 40,
+            COL_ARTICLE: 92,
+            COL_NAME: 130,
+            COL_NOTE: 78,
+            COL_QTY: 58,
+            COL_BUY_PRICE: 72,
+            COL_SUM: 80,
             COL_SELL_PRICE: 112,
-            COL_SELL_PRICE_OLD: 112,
-            COL_SELL_DIFF: 72,
-            COL_MARKUP: 92,
-            COL_STATUS: 128,
-            COL_ACTION: 110,
+            COL_SELL_PRICE_OLD: 98,
+            COL_SELL_DIFF: 48,
+            COL_MARKUP: 82,
+            COL_STATUS: 112,
+            COL_ACTION: 92,
             COL_GOOD_ID: 84,
-            COL_GOOD_CODE: 130,
-            COL_GOOD_NAME: 260,
-            COL_SIMILAR: 180,
-            COL_METHOD: 150,
-            COL_WARNING: 260,
+            COL_GOOD_CODE: 90,
+            COL_GOOD_NAME: 124,
+            COL_SIMILAR: 165,
+            COL_METHOD: 135,
+            # COL_WARNING — последняя видимая колонка, тянется на остаток
+            # ширины (stretchLastSection), поэтому ей ширину не задаём.
         }
         for col, width in widths.items():
             self.table.setColumnWidth(col, width)
@@ -4420,15 +4524,13 @@ class MainWindow(QMainWindow):
 
     def _status_color(self, status: str) -> QColor | None:
         if status in {"exact", "manual"}:
-            return QColor(214, 242, 214)
+            return QColor("#E7F6EE")
         if status == "fuzzy":
-            return QColor(225, 238, 255)
-        if status == "hint":
-            return QColor(255, 244, 205)
-        if status == "ambiguous":
-            return QColor(255, 236, 186)
+            return QColor("#E9EFFC")
+        if status in {"hint", "ambiguous"}:
+            return QColor("#FDF4E2")
         if status == "not_found":
-            return QColor(255, 210, 210)
+            return QColor("#FCECEC")
         return None
 
     def _summary_metrics(
@@ -4516,6 +4618,7 @@ class MainWindow(QMainWindow):
 
     def _log(self, text: str) -> None:
         message = str(text)
+        get_logger().info(message)
         self.log_box.appendPlainText(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
     def _error(self, text: str, exc: Exception | None = None) -> None:
@@ -4523,6 +4626,7 @@ class MainWindow(QMainWindow):
         if exc is not None:
             tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
             message = f"{message}: {exc}\n{''.join(tb).rstrip()}"
+        get_logger().error(text, exc_info=exc)
         self.log_box.appendPlainText(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         QMessageBox.critical(self, "Ошибка", text)
 

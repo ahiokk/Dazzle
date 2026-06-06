@@ -2,7 +2,12 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:\\Users\\irakl\\OneDrive\\Рабочий стол\\codes\\AUTO-255_NAKLADNIE\\store-business-and-finance-svgrepo-com.svg', '.')]
+import os
+ROOT = SPECPATH
+datas = [
+    (os.path.join(ROOT, 'store-business-and-finance-svgrepo-com.svg'), '.'),
+    (os.path.join(ROOT, 'chevron-down.svg'), '.'),
+]
 binaries = []
 hiddenimports = ['win32timezone']
 hiddenimports += collect_submodules('win32com')
@@ -46,7 +51,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    icon=['C:\\Users\\irakl\\OneDrive\\Рабочий стол\\codes\\AUTO-255_NAKLADNIE\\assets\\dazzle.ico'],
+    icon=[os.path.join(ROOT, 'assets', 'dazzle.ico')],
 )
 coll = COLLECT(
     exe,

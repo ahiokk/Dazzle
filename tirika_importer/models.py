@@ -183,3 +183,34 @@ class OzonSaleDocument:
     item_count: int
     display: str
 
+
+@dataclass
+class TirikaOrderItem:
+    good_id: int
+    product_code: str
+    name: str
+    quantity: float
+    price: float
+    comment: str = ""
+
+
+@dataclass
+class TirikaOrder:
+    """Заказ покупателя из Tirika (продажа на контрагента «ЗАКАЗ»). Read-only."""
+
+    waybill_id: int
+    waybill_date: datetime
+    number: str
+    comment: str
+    cost: float
+    paid: float
+    is_reserve: bool
+    reserve_until: datetime | None
+    item_count: int
+    display: str
+    items: list[TirikaOrderItem] = field(default_factory=list)
+
+    @property
+    def is_paid(self) -> bool:
+        return self.paid + 1e-6 >= self.cost and self.cost > 0
+
