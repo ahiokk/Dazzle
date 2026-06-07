@@ -68,6 +68,12 @@ class AppSettings:
     order_customer_name: str = ""  # пусто => автоопределение контрагента «ЗАКАЗ»
     orders_notify_on_startup: bool = True
     orders_show_completed: bool = False
+    # Микадо (заказ Zekkert). Секреты только локально (DPAPI), не в git.
+    mikado_client_code: str = ""
+    mikado_password_enc: str = ""
+    mikado_base_url: str = "https://mikado-parts.ru/ws1/"
+    mikado_order_note: str = "Dazzle"
+    mikado_from_stock_only: bool = False
 
 
 def settings_file_path() -> Path:
@@ -182,6 +188,13 @@ def load_app_settings() -> AppSettings:
         ),
         orders_show_completed=_to_bool(
             raw.get("orders_show_completed"), defaults.orders_show_completed
+        ),
+        mikado_client_code=str(raw.get("mikado_client_code", defaults.mikado_client_code) or ""),
+        mikado_password_enc=str(raw.get("mikado_password_enc", defaults.mikado_password_enc) or ""),
+        mikado_base_url=_to_nonempty_str(raw.get("mikado_base_url"), defaults.mikado_base_url),
+        mikado_order_note=str(raw.get("mikado_order_note", defaults.mikado_order_note) or ""),
+        mikado_from_stock_only=_to_bool(
+            raw.get("mikado_from_stock_only"), defaults.mikado_from_stock_only
         ),
     )
 

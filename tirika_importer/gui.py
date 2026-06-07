@@ -87,6 +87,9 @@ from .qt_compat import (
     qt_exec,
 )
 from .logging_setup import get_logger
+from .mikado import MikadoClient, MikadoError
+from .mikado_gui import MikadoPanel
+from . import secret_store
 from .theme import APP_STYLESHEET
 from .workers import (
     CatalogLoadWorker,
@@ -1416,6 +1419,8 @@ class SettingsDialog(QDialog):
         self._article_match_field_default = current.article_match_field
         self._table_header_state = current.table_header_state
         self._ignored_update_version = current.ignored_update_version
+        self._mikado_password_enc = current.mikado_password_enc
+        self._mikado_base_url = current.mikado_base_url
         self._update_manifest_url = (
             current.update_manifest_url.strip() or AppSettings().update_manifest_url
         )
@@ -1530,6 +1535,49 @@ class SettingsDialog(QDialog):
         )
         price_layout.addWidget(self.price_alert_spin, 2, 1)
         general_layout.addWidget(price_group)
+
+        mikado_group = QGroupBox("Микадо — заказ Zekkert", self)
+        mk = QGridLayout(mikado_group)
+        mk.setHorizontalSpacing(8)
+        mk.setVerticalSpacing(8)
+        mk.addWidget(QLabel("Код клиента:"), 0, 0)
+        self.mikado_code_edit = QLineEdit(self)
+        self.mikado_code_edit.setText(current.mikado_client_code)
+        self.mikado_code_edit.setToolTip("Код клиента Микадо (ClientID).")
+        mk.addWidget(self.mikado_code_edit, 0, 1)
+        mk.addWidget(QLabel("Пароль:"), 1, 0)
+        self.mikado_pass_edit = QLineEdit(self)
+        self.mikado_pass_edit.setEchoMode(QLineEdit.Password)
+        self.mikado_pass_edit.setPlaceholderText(
+            "•••••• (сохранён)" if current.mikado_password_enc else "пароль кабинета Микадо"
+        )
+        self.mikado_pass_edit.setToolTip(
+            "Хранится локально в зашифрованном виде (Windows DPAPI). "
+            "Оставьте пустым, чтобы не менять сохранённый пароль."
+        )
+        mk.addWidget(self.mikado_pass_edit, 1, 1)
+        mk.addWidget(QLabel("Подпись в примечании:"), 2, 0)
+        self.mikado_note_edit = QLineEdit(self)
+        self.mikado_note_edit.setText(current.mikado_order_note or "Dazzle")
+        self.mikado_note_edit.setToolTip("Текст, который Dazzle ставит в примечание позиции в корзине Микадо.")
+        mk.addWidget(self.mikado_note_edit, 2, 1)
+        self.mikado_from_stock_cb = QCheckBox("Искать только в наличии", self)
+        self.mikado_from_stock_cb.setChecked(current.mikado_from_stock_only)
+        mk.addWidget(self.mikado_from_stock_cb, 3, 0, 1, 2)
+        self.mikado_check_btn = QPushButton("Проверить соединение", self)
+        self.mikado_check_btn.setObjectName("subtleBtn")
+        self.mikado_check_btn.setToolTip("Запрашивает ваш IP у Микадо (его нужно привязать) и проверяет доступ.")
+        self.mikado_check_btn.clicked.connect(self._check_mikado)
+        mk.addWidget(self.mikado_check_btn, 4, 0, 1, 2)
+        mikado_hint = QLabel(
+            "Микадо требует привязку вашего IP (письмо на gmv@mikado-parts.ru). "
+            "Dazzle только кладёт позиции в корзину — заказ оформляется вручную в кабинете Микадо.",
+            self,
+        )
+        mikado_hint.setObjectName("subtitleLabel")
+        mikado_hint.setWordWrap(True)
+        mk.addWidget(mikado_hint, 5, 0, 1, 2)
+        general_layout.addWidget(mikado_group)
 
         import_group = QGroupBox("Импорт по умолчанию", self)
         import_layout = QGridLayout(import_group)
@@ -1784,6 +1832,15 @@ class SettingsDialog(QDialog):
             update_manifest_url=self._update_manifest_url,
             auto_check_updates=self.auto_update_check_cb.isChecked(),
             ignored_update_version=self._ignored_update_version,
+            mikado_client_code=self.mikado_code_edit.text().strip(),
+            mikado_password_enc=(
+                secret_store.encrypt(self.mikado_pass_edit.text())
+                if self.mikado_pass_edit.text()
+                else self._mikado_password_enc
+            ),
+            mikado_base_url=self._mikado_base_url,
+            mikado_order_note=(self.mikado_note_edit.text().strip() or "Dazzle"),
+            mikado_from_stock_only=self.mikado_from_stock_cb.isChecked(),
         )
 
     def _pick_db_file(self) -> None:
@@ -1807,6 +1864,35 @@ class SettingsDialog(QDialog):
 
     def _request_check_updates(self) -> None:
         self.check_updates_requested.emit(self._update_manifest_url)
+
+    def _check_mikado(self) -> None:
+        code = self.mikado_code_edit.text().strip()
+        password = self.mikado_pass_edit.text() or secret_store.decrypt(self._mikado_password_enc)
+        if not code or not password:
+            QMessageBox.information(self, "Микадо", "Укажите код клиента и пароль.")
+            return
+        client = MikadoClient(code, password, base_url=self._mikado_base_url)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ip = client.get_my_ip()
+        except Exception as exc:  # noqa: BLE001
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Микадо", f"Не удалось связаться с Микадо:\n{exc}")
+            return
+        auth_msg = ""
+        try:
+            client.search("0986", from_stock_only=False)
+            auth_msg = "Авторизация и поиск работают."
+        except MikadoError as exc:
+            auth_msg = f"Соединение есть, но запрос вернул ошибку:\n{exc}\n(Проверьте код/пароль и привязку IP.)"
+        except Exception as exc:  # noqa: BLE001
+            auth_msg = f"Соединение есть, но запрос не выполнен:\n{exc}"
+        QApplication.restoreOverrideCursor()
+        QMessageBox.information(
+            self,
+            "Микадо",
+            f"Ваш IP: {ip}\nЭтот IP должен быть привязан в кабинете Микадо (gmv@mikado-parts.ru).\n\n{auth_msg}",
+        )
 
     @staticmethod
     def _selected_data(combo: QComboBox, default: int) -> int:
@@ -2223,6 +2309,8 @@ class MainWindow(QMainWindow):
         )
         self.ozon_tab = self._build_ozon_tab()
         self.main_tabs.addTab(self.ozon_tab, "Ozon")
+        self.mikado_panel = MikadoPanel(self)
+        self.main_tabs.addTab(self.mikado_panel, "Микадо")
         root.addWidget(self.main_tabs, 1)
         self.main_tabs.currentChanged.connect(lambda _i: self._ensure_ozon_panel())
 
@@ -2782,6 +2870,8 @@ class MainWindow(QMainWindow):
             return
         self.app_settings = dialog.values()
         self._save_settings()
+        if hasattr(self, "mikado_panel"):
+            self.mikado_panel.reload_settings()
         self._apply_settings_to_runtime_controls()
         self._refresh_invoice_files()
         new_db_path = self.app_settings.db_path.strip()
