@@ -1421,6 +1421,12 @@ class SettingsDialog(QDialog):
         self._ignored_update_version = current.ignored_update_version
         self._mikado_password_enc = current.mikado_password_enc
         self._mikado_base_url = current.mikado_base_url
+        # Поля, которых нет в диалоге, но которые нельзя терять при сохранении.
+        self._order_customer_name = current.order_customer_name
+        self._orders_notify_on_startup = current.orders_notify_on_startup
+        self._orders_show_completed = current.orders_show_completed
+        self._payment_mapping_version = current.payment_mapping_version
+        self._table_layout_version = current.table_layout_version
         self._update_manifest_url = (
             current.update_manifest_url.strip() or AppSettings().update_manifest_url
         )
@@ -1841,6 +1847,11 @@ class SettingsDialog(QDialog):
             mikado_base_url=self._mikado_base_url,
             mikado_order_note=(self.mikado_note_edit.text().strip() or "Dazzle"),
             mikado_from_stock_only=self.mikado_from_stock_cb.isChecked(),
+            order_customer_name=self._order_customer_name,
+            orders_notify_on_startup=self._orders_notify_on_startup,
+            orders_show_completed=self._orders_show_completed,
+            payment_mapping_version=self._payment_mapping_version,
+            table_layout_version=self._table_layout_version,
         )
 
     def _pick_db_file(self) -> None:
