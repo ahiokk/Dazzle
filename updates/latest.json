@@ -1,6 +1,6 @@
 {
-  "version": "1.0.25",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.25/Dazzle-Setup-1.0.25.exe",
-  "sha256": "e849ba5d8171914991e49ed193547ba609e8fb7b0e7f2ef5a073fa1d4c1afdde",
-  "notes": "Настройки прокручиваются; заказ в Микадо по продажам Ozon (вкладка Ozon → «Заказать у Микадо»)."
+  "version": "1.0.26",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.26/Dazzle-Setup-1.0.26.exe",
+  "sha256": "cd8a813f1590c4a6053322ba5c9934c7e71b788040c4c67129d79b6d2abc800a",
+  "notes": "Исправлены количества для товара GM5197/GM5198 в продажах Ozon (2 и 4)."
 }
