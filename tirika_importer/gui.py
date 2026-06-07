@@ -2812,8 +2812,7 @@ class MainWindow(QMainWindow):
         self.ozon_placeholder.setWordWrap(True)
         self.ozon_placeholder.setAlignment(Qt.AlignCenter)
         self.ozon_placeholder.setContentsMargins(20, 40, 20, 40)
-        layout.addWidget(self.ozon_placeholder)
-        layout.addStretch(1)
+        layout.addWidget(self.ozon_placeholder, 1)
         return tab
 
     def _ensure_ozon_panel(self) -> None:

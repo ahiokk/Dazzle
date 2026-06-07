@@ -126,6 +126,9 @@ ORDERS_STYLESHEET = """
 
 /* Composer / detail */
 #ordersRoot QLabel#composerTitle { font-size: 16pt; font-weight: 800; color: #0F1B3D; }
+#ordersRoot QLabel#modeBadge { border-radius: 8px; padding: 4px 12px; font-size: 9pt; font-weight: 800; }
+#ordersRoot QLabel#modeBadge[mode="new"]  { background: #E7F6EE; color: #15803D; border: 1px solid #BFE6CD; }
+#ordersRoot QLabel#modeBadge[mode="edit"] { background: #EAF0FB; color: #1E40AF; border: 1px solid #C6D6F5; }
 #ordersRoot QLabel#fieldLab { color: #64748B; font-size: 9.5pt; font-weight: 700; }
 #ordersRoot QLineEdit#lineIn {
     border: none; border-bottom: 1.5px solid #D8E1EF; background: transparent;
@@ -412,6 +415,12 @@ class OrdersWidget(QWidget):
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(30, 26, 30, 26)
         lay.setSpacing(0)
+
+        self.mode_badge = QLabel("", self)
+        self.mode_badge.setObjectName("modeBadge")
+        self.mode_badge.setVisible(False)
+        lay.addWidget(self.mode_badge, 0, Qt.AlignLeft)
+        lay.addSpacing(10)
 
         self.composer_title = QLabel("Новая заметка", self)
         self.composer_title.setObjectName("composerTitle")
@@ -834,11 +843,27 @@ class OrdersWidget(QWidget):
         self.empty_box.setVisible(not show_form)
         self.form_box.setVisible(show_form)
 
+    def _set_mode_badge(self, kind: str) -> None:
+        """Видимый индикатор режима: создание новой записи vs редактирование."""
+        if kind == "new":
+            self.mode_badge.setText("＋  НОВАЯ ЗАМЕТКА")
+            self.mode_badge.setProperty("mode", "new")
+            self.mode_badge.setVisible(True)
+        elif kind == "edit":
+            self.mode_badge.setText("РЕДАКТИРОВАНИЕ")
+            self.mode_badge.setProperty("mode", "edit")
+            self.mode_badge.setVisible(True)
+        else:
+            self.mode_badge.setVisible(False)
+        self.mode_badge.style().unpolish(self.mode_badge)
+        self.mode_badge.style().polish(self.mode_badge)
+
     def _start_new_order(self) -> None:
         self._mode = "new"
         self._current = None
         self._apply_row_selection(None)
         self._set_form_visible(True)
+        self._set_mode_badge("new")
         self.composer_title.setText("Новая заметка")
         self.customer_edit.setReadOnly(False)
         self.customer_edit.clear()
@@ -847,7 +872,7 @@ class OrdersWidget(QWidget):
         self._set_comp_visible(False)
         self._set_due_mode("today")
         self.save_btn.setEnabled(True)
-        self.save_btn.setText("Сохранить")
+        self.save_btn.setText("Создать заметку")
         self.done_btn.setVisible(False)
         self.delete_btn.setVisible(False)
         self.customer_edit.setFocus()
@@ -856,10 +881,12 @@ class OrdersWidget(QWidget):
         self._mode = "empty"
         self.composer_title.setText("Заказы и напоминания")
         self._set_form_visible(False)
+        self._set_mode_badge("hidden")
 
     def _show_manual_detail(self, rem: Reminder) -> None:
         self._mode = "manual"
         self._set_form_visible(True)
+        self._set_mode_badge("edit")
         self.composer_title.setText(rem.customer or "Заметка")
         self.customer_edit.setReadOnly(False)
         self.customer_edit.setText(rem.customer)
@@ -877,6 +904,7 @@ class OrdersWidget(QWidget):
     def _show_tirika_detail(self, order: TirikaOrder, entry: _Entry) -> None:
         self._mode = "tirika"
         self._set_form_visible(True)
+        self._set_mode_badge("edit")
         self.composer_title.setText(f"Заказ · {entry.customer}")
         self.customer_edit.setReadOnly(True)
         self.customer_edit.setText(order.comment or order.number or "Заказ покупателя")
