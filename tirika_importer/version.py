@@ -6,7 +6,7 @@ import sys
 
 APP_NAME = "Dazzle"
 APP_WIN7_NAME = "Dazzle Win7"
-APP_VERSION = "1.0.26"
+APP_VERSION = "1.0.27"
 
 
 def is_win7_build() -> bool:
