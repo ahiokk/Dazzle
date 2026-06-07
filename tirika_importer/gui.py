@@ -69,6 +69,7 @@ from .qt_compat import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStyle,
     QStyledItemDelegate,
@@ -1432,6 +1433,12 @@ class SettingsDialog(QDialog):
         )
         self.setWindowTitle("Настройки Dazzle")
         self.resize(920, 640)
+        _screen = QApplication.primaryScreen()
+        if _screen is not None:
+            _avail_h = _screen.availableGeometry().height()
+            self.setMaximumHeight(_avail_h)
+            if _avail_h < 680:
+                self.resize(920, max(420, _avail_h - 60))
         self.setStyleSheet(APP_STYLESHEET)
 
         root = QVBoxLayout(self)
@@ -1458,13 +1465,21 @@ class SettingsDialog(QDialog):
         general_layout = QVBoxLayout(general_tab)
         general_layout.setContentsMargins(6, 6, 6, 6)
         general_layout.setSpacing(10)
-        tabs.addTab(general_tab, "Основные")
+        general_scroll = QScrollArea(self)
+        general_scroll.setWidgetResizable(True)
+        general_scroll.setFrameShape(QFrame.NoFrame)
+        general_scroll.setWidget(general_tab)
+        tabs.addTab(general_scroll, "Основные")
 
         import_tab = QWidget(self)
         import_layout_root = QVBoxLayout(import_tab)
         import_layout_root.setContentsMargins(6, 6, 6, 6)
         import_layout_root.setSpacing(10)
-        tabs.addTab(import_tab, "Импорт")
+        import_scroll = QScrollArea(self)
+        import_scroll.setWidgetResizable(True)
+        import_scroll.setFrameShape(QFrame.NoFrame)
+        import_scroll.setWidget(import_tab)
+        tabs.addTab(import_scroll, "Импорт")
 
         paths_group = QGroupBox("Пути", self)
         paths_layout = QGridLayout(paths_group)
