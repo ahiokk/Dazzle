@@ -89,7 +89,6 @@ from .qt_compat import (
 )
 from .logging_setup import get_logger
 from .mikado import MikadoClient, MikadoError
-from .mikado_gui import MikadoPanel
 from . import secret_store
 from .theme import APP_STYLESHEET
 from .workers import (
@@ -753,6 +752,46 @@ class OzonDialog(QDialog):
             return
         super().closeEvent(event)
 
+    def _order_from_mikado(self) -> None:
+        """Заказать проданные на Ozon позиции у поставщика Микадо (в корзину)."""
+        from .mikado_gui import MikadoOrderDialog, make_client
+
+        if make_client(self.app_settings) is None:
+            QMessageBox.information(
+                self,
+                "Микадо",
+                "Микадо не настроен. Откройте «Настройки» → раздел «Микадо» и "
+                "укажите код клиента и пароль.",
+            )
+            return
+        lines = list(self.parsed.lines) if self.parsed else []
+        agg: dict[str, dict] = {}
+        for ln in lines:
+            if ln.action != "import":
+                continue
+            qty = float(ln.quantity or 0)
+            if qty <= 0:
+                continue
+            code = (ln.matched_product_code or ln.article or ln.source_article or "").strip()
+            if not code:
+                continue
+            name = ln.matched_name or ln.name or code
+            if code in agg:
+                agg[code]["qty"] += qty
+            else:
+                agg[code] = {"name": name, "qty": qty}
+        items = [(code, v["name"], v["qty"]) for code, v in agg.items()]
+        if not items:
+            QMessageBox.information(
+                self,
+                "Микадо",
+                "Нет проданных позиций к заказу. Загрузите CSV Ozon и убедитесь, "
+                "что для нужных позиций выбрано действие «import».",
+            )
+            return
+        dlg = MikadoOrderDialog(self, self.app_settings, items)
+        qt_exec(dlg)
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -889,9 +928,16 @@ class OzonDialog(QDialog):
         self.check_btn.setObjectName("subtleBtn")
         self.import_btn = QPushButton("Создать документы Ozon", self)
         self.import_btn.setObjectName("successBtn")
+        self.mikado_btn = QPushButton("Заказать у Микадо", self)
+        self.mikado_btn.setObjectName("subtleBtn")
+        self.mikado_btn.setToolTip(
+            "Заказать проданные позиции у поставщика Микадо (кладёт в корзину; "
+            "заказ оформляется вручную в кабинете Микадо)."
+        )
         self.close_btn = QPushButton("Закрыть", self)
         footer_layout.addWidget(self.pick_btn)
         footer_layout.addWidget(self.check_btn)
+        footer_layout.addWidget(self.mikado_btn)
         footer_layout.addWidget(self.import_btn)
         footer_layout.addWidget(self.close_btn)
         root.addWidget(footer)
@@ -917,6 +963,7 @@ class OzonDialog(QDialog):
         self.pick_btn.clicked.connect(self._pick_good_for_selected)
         self.check_btn.clicked.connect(lambda: self._run_import(dry_run=True))
         self.import_btn.clicked.connect(lambda: self._run_import(dry_run=False))
+        self.mikado_btn.clicked.connect(self._order_from_mikado)
         self.close_btn.clicked.connect(self.reject)
         self.sale_mode_combo.currentIndexChanged.connect(self._on_sale_mode_changed)
         self.target_shop_combo.currentIndexChanged.connect(self._refresh_ozon_sales)
@@ -2335,8 +2382,6 @@ class MainWindow(QMainWindow):
         )
         self.ozon_tab = self._build_ozon_tab()
         self.main_tabs.addTab(self.ozon_tab, "Ozon")
-        self.mikado_panel = MikadoPanel(self)
-        self.main_tabs.addTab(self.mikado_panel, "Микадо")
         root.addWidget(self.main_tabs, 1)
         self.main_tabs.currentChanged.connect(lambda _i: self._ensure_ozon_panel())
 
@@ -2896,8 +2941,6 @@ class MainWindow(QMainWindow):
             return
         self.app_settings = dialog.values()
         self._save_settings()
-        if hasattr(self, "mikado_panel"):
-            self.mikado_panel.reload_settings()
         self._apply_settings_to_runtime_controls()
         self._refresh_invoice_files()
         new_db_path = self.app_settings.db_path.strip()
