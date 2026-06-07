@@ -1,6 +1,6 @@
 {
-  "version": "1.0.23",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.23/Dazzle-Setup-1.0.23.exe",
-  "sha256": "4465c98495807d98885cda54080c1aeea0fc4eb45cebf8256df1fcfc02c3767d",
-  "notes": "Исправлено чтение Excel на Win7."
+  "version": "1.0.24",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.24/Dazzle-Setup-1.0.24.exe",
+  "sha256": "7b959d36232fbe143979ae018f960050fc82eed6b8aaeda7c7392be6bd12e342",
+  "notes": "Новый светлый интерфейс, запуск на весь экран, вкладка «Микадо» (заказ Zekkert) и улучшения «Заказов и напоминаний»."
 }
