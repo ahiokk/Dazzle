@@ -1,6 +1,6 @@
 {
-  "version": "1.0.24",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.24/Dazzle-Setup-1.0.24.exe",
-  "sha256": "7b959d36232fbe143979ae018f960050fc82eed6b8aaeda7c7392be6bd12e342",
-  "notes": "Новый светлый интерфейс, запуск на весь экран, вкладка «Микадо» (заказ Zekkert) и улучшения «Заказов и напоминаний»."
+  "version": "1.0.25",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.25/Dazzle-Setup-1.0.25.exe",
+  "sha256": "e849ba5d8171914991e49ed193547ba609e8fb7b0e7f2ef5a073fa1d4c1afdde",
+  "notes": "Настройки прокручиваются; заказ в Микадо по продажам Ozon (вкладка Ozon → «Заказать у Микадо»)."
 }
