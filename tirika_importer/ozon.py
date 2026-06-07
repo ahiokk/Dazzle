@@ -219,6 +219,15 @@ def _is_active_order_status(status: str) -> bool:
     return "ожидает" in text or "await" in text
 
 
+# Особые «рецепты» для конкретных товаров-комплектов Ozon, где распределение
+# количества по компонентам НЕЛЬЗЯ вывести из строки артикула (в артикуле общее
+# число, но раскладка неравномерная). Применяется ТОЛЬКО к этим наборам кодов.
+# Пример: «GM5197/GM5198/6» — 6 это общее кол-во, а нужно GM5197×2 + GM5198×4.
+_SPECIAL_SET_RECIPES = {
+    frozenset({"GM5197", "GM5198"}): {"GM5197": 2.0, "GM5198": 4.0},
+}
+
+
 def _parse_article_components(
     article_raw: str,
     source_quantity: float,
@@ -240,6 +249,15 @@ def _parse_article_components(
 
     slash_parts = [part.strip() for part in article.split("/") if part.strip()]
     if len(slash_parts) >= 2:
+        # Особый рецепт для конкретного товара (неравномерное распределение).
+        codes_only = [c for c in (_clean_article_code(p) for p in slash_parts if not p.isdigit()) if c]
+        special = _SPECIAL_SET_RECIPES.get(frozenset(codes_only))
+        if special:
+            return [
+                (code, _article_code_options(code), source_quantity * special[code], "")
+                for code in codes_only
+            ]
+
         pair_components = _parse_code_quantity_pairs(slash_parts, source_quantity)
         if pair_components:
             return pair_components
