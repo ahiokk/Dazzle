@@ -17,7 +17,7 @@ from tirika_importer.qt_compat import QApplication, qt_exec
 def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     return int(qt_exec(app))
 
 
