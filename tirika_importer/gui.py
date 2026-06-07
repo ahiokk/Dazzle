@@ -756,12 +756,15 @@ class OzonDialog(QDialog):
         """Заказать проданные на Ozon позиции у поставщика Микадо (в корзину)."""
         from .mikado_gui import MikadoOrderDialog, make_client
 
+        # Перечитываем настройки с диска: копия в панели Ozon могла устареть
+        # (креды Микадо могли быть введены уже после открытия вкладки).
+        self.app_settings = load_app_settings()
         if make_client(self.app_settings) is None:
             QMessageBox.information(
                 self,
                 "Микадо",
-                "Микадо не настроен. Откройте «Настройки» → раздел «Микадо» и "
-                "укажите код клиента и пароль.",
+                "Не вижу данные Микадо. Откройте «Настройки» → раздел «Микадо», "
+                "введите код клиента и пароль и нажмите «Сохранить», затем повторите.",
             )
             return
         lines = list(self.parsed.lines) if self.parsed else []
@@ -2941,6 +2944,8 @@ class MainWindow(QMainWindow):
             return
         self.app_settings = dialog.values()
         self._save_settings()
+        if getattr(self, "_ozon_panel", None) is not None:
+            self._ozon_panel.app_settings = self.app_settings
         self._apply_settings_to_runtime_controls()
         self._refresh_invoice_files()
         new_db_path = self.app_settings.db_path.strip()
