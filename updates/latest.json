@@ -1,6 +1,6 @@
 {
-  "version": "1.0.26",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.26/Dazzle-Setup-1.0.26.exe",
-  "sha256": "cd8a813f1590c4a6053322ba5c9934c7e71b788040c4c67129d79b6d2abc800a",
-  "notes": "Исправлены количества для товара GM5197/GM5198 в продажах Ozon (2 и 4)."
+  "version": "1.0.28",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.28/Dazzle-AUTO255-Win10-Setup-1.0.28.exe",
+  "sha256": "f2be192b026018d9d39d5d69f558ab6ce46b1a5aa67b61c72af74ab4713ed16c",
+  "notes": "Минимальная наценка 50% с автоподъёмом цены, цветные диапазоны наценки, подсказки по строке. Сборка AUTO255 (с Ozon)."
 }

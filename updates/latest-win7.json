@@ -1,6 +1,6 @@
 {
-  "version": "1.0.23",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.23/Dazzle-Win7-Setup-1.0.23.exe",
-  "sha256": "803cb8ace8c3ca1bd4106139bca2ff112b879b515cd8b53635527716df48a20f",
-  "notes": "Исправлено чтение Excel на Win7."
+  "version": "1.0.28",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.28/Dazzle-Lastochka-Win7-Setup-1.0.28.exe",
+  "sha256": "9d31f6874e6b3d7b472af8f0f0d53f6a9b06a00612e6e1134cfb251f51324881",
+  "notes": "Минимальная наценка 50% с автоподъёмом цены, цветные диапазоны наценки, подсказки по строке. Сборка Lastochka для Windows 7."
 }

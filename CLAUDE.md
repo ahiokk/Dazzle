@@ -91,6 +91,17 @@
   программы (`startup.py`), иначе после установки будет два автозапуска.
 - `ISCC.exe` (Inno Setup 6) ищется в `%ProgramFiles%`, `%ProgramFiles(x86)%` и
   `%LOCALAPPDATA%\Programs\Inno Setup 6` — на этой машине он в `%LOCALAPPDATA%`.
+- **Антивирус ломает параллельную упаковку.** При трёх одновременных сборках Inno падает
+  на последнем шаге: `Resource update error: EndUpdateResource failed ... (110)` —
+  антивирус держит свежий `Setup.exe`. EXE при этом уже собран, достаточно повторить
+  только шаг Inno: `.\build_installer_lastochka.ps1 -SkipDeps` (без `-RebuildExe`).
+  Лечится добавлением `installer_output` в исключения антивируса.
+- Скрипты сборки печатают SHA256 в конце — но если запускаешь их в фоне и ждёшь файл,
+  **условие ожидания должно ловить и провал тоже**, иначе упавшая сборка выглядит как
+  «ещё идёт» (уже наступали).
+- PyInstaller 6 (auto255/vag) кладёт данные в `_internal\`, PyInstaller 5.13 (lastochka) —
+  в корень папки сборки. `theme.py` ищет иконки через `Path(__file__).parent.parent`,
+  и оба варианта в это попадают.
 
 ## Релиз и автообновление
 
