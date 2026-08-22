@@ -1,7 +1,12 @@
 param(
     [string]$PythonVersion = "3.8",
-    [string]$PythonExe = "python"
+    [string]$PythonExe = "python",
+    [switch]$SkipDeps
 )
+
+# Редакция Lastochka (магазин на Windows 7): PySide2 + Python 3.8.
+# Имя exe остаётся DazzleWin7.exe — по нему работает автообновление уже
+# установленной копии (манифест updates\latest-win7.json).
 
 $ErrorActionPreference = "Stop"
 
@@ -10,7 +15,10 @@ Set-Location $projectRoot
 $appName = "DazzleWin7"
 $iconPath = Join-Path $projectRoot "assets\dazzle.ico"
 $logoSvgPath = Join-Path $projectRoot "store-business-and-finance-svgrepo-com.svg"
+$chevronSvgPath = Join-Path $projectRoot "chevron-down.svg"
 
+# Свой рабочий каталог PyInstaller — тогда сборки редакций можно гонять параллельно.
+$workPath = Join-Path $projectRoot "build\$appName"
 $venvDir = Join-Path $projectRoot ".build_venv_py$($PythonVersion.Replace('.', ''))_win7"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 
@@ -50,32 +58,40 @@ function Remove-PathWithRetry {
 }
 
 if (-not (Test-Path $venvPython)) {
-    Write-Host "== Creating Win7 build virtual environment ==" -ForegroundColor Cyan
+    Write-Host "== Creating Lastochka (Win7) build virtual environment ==" -ForegroundColor Cyan
     New-BuildVenv
     if ($LASTEXITCODE -ne 0) {
         throw "Не удалось создать build venv для Win7"
     }
 }
 
-Write-Host "== Installing Win7 build dependencies in venv ==" -ForegroundColor Cyan
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r .\requirements.win7.txt pyinstaller==5.13.2
-if ($LASTEXITCODE -ne 0) {
-    throw "Не удалось установить зависимости Win7 в build venv"
+if ($SkipDeps) {
+    Write-Host "== Skipping dependency install (-SkipDeps) ==" -ForegroundColor DarkCyan
+}
+else {
+    Write-Host "== Installing Lastochka (Win7) build dependencies in venv ==" -ForegroundColor Cyan
+    & $venvPython -m pip install --upgrade pip
+    & $venvPython -m pip install -r .\requirements.win7.txt pyinstaller==5.13.2
+    if ($LASTEXITCODE -ne 0) {
+        throw "Не удалось установить зависимости Win7 в build venv"
+    }
 }
 
-Write-Host "== Cleaning old Win7 build folders ==" -ForegroundColor Cyan
-Remove-PathWithRetry ".\build"
+Write-Host "== Cleaning old Lastochka build folders ==" -ForegroundColor Cyan
+Remove-PathWithRetry $workPath
 Remove-PathWithRetry ".\dist\$appName"
-Remove-PathWithRetry ".\$appName.spec"
 
-Write-Host "== Building Win7 EXE ==" -ForegroundColor Cyan
+Write-Host "== Building Lastochka (Win7) EXE ==" -ForegroundColor Cyan
 $pyiArgs = @(
     "--noconfirm",
     "--clean",
     "--windowed",
     "--uac-admin",
     "--name", $appName,
+    "--workpath", $workPath,
+    # Сгенерированный .spec кладём в рабочий каталог, чтобы не перетирать
+    # версию в корне репозитория (там относительные пути).
+    "--specpath", $workPath,
     "--collect-all", "PySide2",
     "--collect-all", "shiboken2",
     "--collect-submodules", "win32com",
@@ -101,6 +117,15 @@ if (Test-Path $logoSvgPath) {
 }
 else {
     Write-Host "Предупреждение: SVG логотип не найден ($logoSvgPath)." -ForegroundColor Yellow
+}
+
+# theme.py ищет иконки рядом с пакетом (в сборке это _internal), иначе у выпадающих
+# списков пропадает стрелка.
+if (Test-Path $chevronSvgPath) {
+    $pyiArgs += @("--add-data", "$chevronSvgPath;.")
+}
+else {
+    Write-Host "Предупреждение: chevron-down.svg не найден ($chevronSvgPath)." -ForegroundColor Yellow
 }
 
 & $venvPython -m PyInstaller @pyiArgs

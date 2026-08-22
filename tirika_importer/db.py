@@ -2100,3 +2100,71 @@ def calculate_suggested_sell_price(
     base = max(0.0, float(buy_price))
     marked = base * (1.0 + (markup_percent / 100.0))
     return round_up_to_step(marked, round_step)
+
+
+def calculate_markup_percent(buy_price: float | None, sell_price: float | None) -> float | None:
+    """Наценка в процентах от закупки. None, если посчитать нельзя."""
+    if buy_price is None or sell_price is None:
+        return None
+    buy = float(buy_price)
+    if buy <= 0:
+        return None
+    return ((float(sell_price) - buy) / buy) * 100.0
+
+
+# Диапазоны наценки для подсветки колонки «Наценка». Порядок важен: ищем первый
+# диапазон, в который попадает значение.
+MARKUP_BAND_LOW = "low"        # ниже минимума магазина — так продавать нельзя
+MARKUP_BAND_NORMAL = "normal"  # 50–75%
+MARKUP_BAND_GOOD = "good"      # 75–100%
+MARKUP_BAND_HIGH = "high"      # 100–200%
+MARKUP_BAND_EXTREME = "extreme"  # больше 200%
+
+
+def markup_band(
+    markup_pct: float | None,
+    *,
+    min_markup_percent: float = 50.0,
+) -> str | None:
+    """Ключ диапазона наценки для подсветки строки накладной."""
+    if markup_pct is None:
+        return None
+    value = float(markup_pct)
+    if value < float(min_markup_percent) - 0.05:
+        return MARKUP_BAND_LOW
+    if value < 75.0:
+        return MARKUP_BAND_NORMAL
+    if value < 100.0:
+        return MARKUP_BAND_GOOD
+    if value < 200.0:
+        return MARKUP_BAND_HIGH
+    return MARKUP_BAND_EXTREME
+
+
+def enforce_min_markup_price(
+    buy_price: float | None,
+    current_sell_price: float | None,
+    *,
+    min_markup_percent: float = 50.0,
+    round_step: float = 50.0,
+) -> float | None:
+    """Цена, до которой надо поднять продажу, если наценка ниже минимума.
+
+    Возвращает None, если поднимать не нужно (наценка уже не ниже минимума,
+    минимум отключён, или закупочная цена неизвестна).
+    """
+    if float(min_markup_percent) <= 0:
+        return None
+    current_pct = calculate_markup_percent(buy_price, current_sell_price)
+    if current_pct is None:
+        return None
+    if current_pct >= float(min_markup_percent) - 0.05:
+        return None
+    floor_price = calculate_suggested_sell_price(
+        float(buy_price or 0.0),
+        markup_percent=float(min_markup_percent),
+        round_step=round_step,
+    )
+    if floor_price <= float(current_sell_price or 0.0) + 0.0001:
+        return None
+    return floor_price

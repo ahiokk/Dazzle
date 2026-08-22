@@ -12,8 +12,16 @@
   - `barcodes.barcode`
 - Позволяет вручную выбрать товар для строки через визуальный поиск.
 - Поддерживает действия по строке: `import` / `create` / `skip`.
-- Автоматически считает новую продажную цену: `закупка +50%`, округление вверх до шага `50`.
-- Показывает цену продажи из БД, сравнивает с новой и подсвечивает крупные расхождения.
+- Автоматически считает новую продажную цену: `закупка +наценка`, округление вверх до шага `50`.
+- Держит минимальную наценку магазина (по умолчанию `50%`): если товар в базе продаётся
+  дешевле, Dazzle сам поднимает цену продажи ровно до минимума и помечает строку в колонке
+  «Предупреждение» коротко — `35% → 50%`. Полное пояснение — во всплывающей подсказке строки.
+- Показывает подсказку при наведении на строку: артикул, полное название, закуп/продажа,
+  наценка и предупреждения — не нужно расширять колонки, чтобы прочитать обрезанный текст.
+- Подсвечивает колонку «Наценка» по диапазонам, чтобы аномалии были видны глазами:
+  ниже минимума — красный, `50–75%` — оранжевый, `75–100%` — зелёный,
+  `100–200%` — жёлтый, больше `200%` — красный.
+- Показывает цену продажи из БД и расхождение с новой ценой.
 - Импортирует в таблицы Tirika:
   - `waybills`
   - `waybill_items`
@@ -22,6 +30,32 @@
 - Делает backup базы перед импортом (опционально).
 - Имеет режим `dry-run` (проверка без записи, транзакция откатывается).
 - Поддерживает проверку обновлений приложения через `latest.json` (GitHub/HTTP).
+
+## Редакции (для каких магазинов сборка)
+Раньше сборки назывались по версии Windows (`win10` / `win7`). На самом деле каждая
+сборка — это конкретный магазин со своим набором функций:
+
+| Редакция | Магазин | Qt / Python | EXE | Ozon | Манифест обновлений |
+|---|---|---|---|---|---|
+| `auto255` | AUTO255 | PySide6 / 3.13 | `Dazzle.exe` | да | `updates/latest.json` |
+| `lastochka` | Lastochka (Windows 7) | PySide2 / 3.8 | `DazzleWin7.exe` | нет | `updates/latest-win7.json` |
+| `vag` | VAG | PySide6 / 3.13 | `DazzleVAG.exe` | нет | `updates/latest-vag.json` |
+
+Вкладка «Ozon» и заказ у Микадо есть только в `auto255` — остальным магазинам они не нужны.
+
+Редакция определяется во время запуска (`tirika_importer/version.py`):
+1. переменная окружения `DAZZLE_EDITION` (`auto255` / `lastochka` / `vag`);
+2. иначе — по имени exe (`DazzleVAG.exe` → VAG, `DazzleWin7.exe` → Lastochka);
+3. запуск из исходников (`python main.py`) — это `auto255`.
+
+Чтобы посмотреть чужую редакцию из исходников:
+
+```powershell
+$env:DAZZLE_EDITION = "vag"; python main.py
+```
+
+Имена `DazzleWin7.exe` и `updates/latest-win7.json` намеренно не переименованы:
+на них завязано автообновление уже установленной копии Lastochka.
 
 ## Важные требования
 - Windows + установленный Microsoft Excel (для fallback чтения проблемных `.xls`).
@@ -46,34 +80,51 @@ python main.py
   - папка с накладными
   - наценка
   - шаг округления
-  - порог красной подсветки расхождения цены
+  - минимальная наценка магазина и её принудительное соблюдение
 - После этого в главном окне накладные выбираются из внутреннего списка файлов `.xls/.xlsx` без системного окна выбора.
 
 ## Сборка EXE
-В корне проекта:
+В корне проекта — по редакции:
 
 ```powershell
-.\build_exe.ps1
+.\build_exe.ps1 -Edition auto255
 ```
 
-Или двойной клик по `build_exe.bat`.
+```powershell
+.\build_exe.ps1 -Edition vag
+```
 
-Готовый файл:
+```powershell
+.\build_exe_lastochka.ps1
+```
 
-`dist\Dazzle\Dazzle.exe`
+Или двойной клик по `build_exe.bat` (это AUTO255).
+
+Готовые файлы:
+
+`dist\Dazzle\Dazzle.exe`, `dist\DazzleVAG\DazzleVAG.exe`, `dist\DazzleWin7\DazzleWin7.exe`
 
 Важно: это `one-folder` сборка. Для ручного переноса на другой ПК нужно копировать всю папку  
-`dist\Dazzle` целиком, включая `_internal`.
+`dist\<редакция>` целиком, включая `_internal`.
 
 ## Сборка установщика (Setup.exe)
 1. Установить Inno Setup 6 (чтобы был доступен `ISCC.exe`).
-2. В корне проекта выполнить:
+2. В корне проекта выполнить нужную редакцию:
 
 ```powershell
-.\build_installer.ps1
+.\build_installer.ps1 -Edition auto255 -RebuildExe
 ```
 
-Или двойной клик по `build_installer.bat`.
+```powershell
+.\build_installer.ps1 -Edition vag -RebuildExe
+```
+
+```powershell
+.\build_installer_lastochka.ps1 -RebuildExe
+```
+
+Двойной клик: `build_installer.bat` — AUTO255, `build_installer_vag.bat` — VAG.
+В конце сборки скрипт печатает SHA256 готового установщика (нужен для манифеста обновлений).
 
 По умолчанию версия установщика: `1.0.0`.  
 Можно задать свою:
@@ -89,9 +140,11 @@ python main.py
 .\build_installer.ps1 -RebuildExe
 ```
 
-Готовый установщик появится в:
+Готовые установщики появятся в:
 
-`installer_output\Dazzle-Setup-<version>.exe`
+- `installer_output\Dazzle-AUTO255-Win10-Setup-<version>.exe` — AUTO255
+- `installer_output\Dazzle-VAG-Win10-Setup-<version>.exe` — VAG
+- `installer_output\Dazzle-Lastochka-Win7-Setup-<version>.exe` — Lastochka
 
 ## Обновления через Git (GitHub Releases)
 В приложении реализован автоапдейтер по манифесту `latest.json`.
@@ -102,21 +155,22 @@ python main.py
 
 ### 2. Выпустить новую версию
 1. Обновите версию приложения в `tirika_importer/version.py` (`APP_VERSION`).
-2. Соберите новый инсталлятор:
+2. Соберите новый инсталлятор нужной редакции:
 ```powershell
-.\build_installer.ps1 -RebuildExe -AppVersion 1.0.3
+.\build_installer.ps1 -Edition auto255 -RebuildExe -AppVersion 1.0.3
 ```
-3. Возьмите SHA256 файла:
+3. Возьмите SHA256 файла (скрипт печатает его сам, либо вручную):
 ```powershell
-Get-FileHash .\installer_output\Dazzle-Setup-1.0.3.exe -Algorithm SHA256
+Get-FileHash .\installer_output\Dazzle-AUTO255-Win10-Setup-1.0.3.exe -Algorithm SHA256
 ```
 4. Создайте git tag и релиз на GitHub: `v1.0.3`.
-5. Прикрепите в Release файл `Dazzle-Setup-1.0.3.exe`.
-6. Обновите `updates/latest.json`:
+5. Прикрепите в Release файл `Dazzle-AUTO255-Win10-Setup-1.0.3.exe`.
+6. Обновите манифест своей редакции — `updates/latest.json` (AUTO255),
+   `updates/latest-vag.json` (VAG) или `updates/latest-win7.json` (Lastochka):
 ```json
 {
   "version": "1.0.3",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.3/Dazzle-Setup-1.0.3.exe",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.3/Dazzle-AUTO255-Win10-Setup-1.0.3.exe",
   "sha256": "<SHA256>",
   "notes": "Краткое описание изменений"
 }

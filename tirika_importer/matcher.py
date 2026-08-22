@@ -126,7 +126,6 @@ class GoodsMatcher:
                 line.sell_price = line.price
                 line.suggested_sell_price = None
                 line.sell_price_diff_percent = None
-                line.price_alert = False
                 line.matched_tax_mode = 0
                 line.action = "skip"
             return
@@ -151,7 +150,6 @@ class GoodsMatcher:
         line.sell_price = line.price
         line.suggested_sell_price = None
         line.sell_price_diff_percent = None
-        line.price_alert = False
         line.matched_tax_mode = 0
         line.action = "create"
         line.warning = "Товар не найден автоматически."

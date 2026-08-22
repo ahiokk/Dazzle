@@ -1,16 +1,35 @@
 param(
     [string]$PythonVersion = "3.13",
-    [string]$PythonExe = "python"
+    [string]$PythonExe = "python",
+    [ValidateSet("auto255", "vag")]
+    [string]$Edition = "auto255",
+    [switch]$SkipDeps
 )
+
+# Сборка EXE для редакций на PySide6 (Windows 10/11):
+#   auto255 -> dist\Dazzle\Dazzle.exe          (с вкладкой Ozon)
+#   vag     -> dist\DazzleVAG\DazzleVAG.exe    (без Ozon)
+# Редакция определяется в программе по имени exe (tirika_importer\version.py).
+# Сборка Lastochka (Windows 7, PySide2) — отдельный скрипт build_exe_lastochka.ps1.
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
-$appName = "Dazzle"
+
+if ($Edition -eq "vag") {
+    $appName = "DazzleVAG"
+}
+else {
+    $appName = "Dazzle"
+}
+
 $iconPath = Join-Path $projectRoot "assets\dazzle.ico"
 $logoSvgPath = Join-Path $projectRoot "store-business-and-finance-svgrepo-com.svg"
+$chevronSvgPath = Join-Path $projectRoot "chevron-down.svg"
 
+# Свой рабочий каталог PyInstaller на редакцию — тогда сборки можно гонять параллельно.
+$workPath = Join-Path $projectRoot "build\$appName"
 $venvDir = Join-Path $projectRoot ".build_venv_py$($PythonVersion.Replace('.', ''))"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 
@@ -49,6 +68,8 @@ function Remove-PathWithRetry {
     }
 }
 
+Write-Host "== Edition: $Edition (exe: $appName.exe) ==" -ForegroundColor Cyan
+
 if (-not (Test-Path $venvPython)) {
     Write-Host "== Creating build virtual environment ==" -ForegroundColor Cyan
     New-BuildVenv
@@ -57,17 +78,22 @@ if (-not (Test-Path $venvPython)) {
     }
 }
 
-Write-Host "== Installing build dependencies in venv ==" -ForegroundColor Cyan
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r .\requirements.txt pyinstaller
-if ($LASTEXITCODE -ne 0) {
-    throw "Не удалось установить зависимости в build venv"
+if ($SkipDeps) {
+    Write-Host "== Skipping dependency install (-SkipDeps) ==" -ForegroundColor DarkCyan
+}
+else {
+    Write-Host "== Installing build dependencies in venv ==" -ForegroundColor Cyan
+    & $venvPython -m pip install --upgrade pip
+    & $venvPython -m pip install -r .\requirements.txt pyinstaller
+    if ($LASTEXITCODE -ne 0) {
+        throw "Не удалось установить зависимости в build venv"
+    }
 }
 
 Write-Host "== Cleaning old build folders ==" -ForegroundColor Cyan
-Remove-PathWithRetry ".\build"
-Remove-PathWithRetry ".\dist"
-Remove-PathWithRetry ".\$appName.spec"
+# Чистим только свою редакцию, чтобы не сносить сборки остальных магазинов.
+Remove-PathWithRetry $workPath
+Remove-PathWithRetry ".\dist\$appName"
 Remove-PathWithRetry ".\TirikaInvoiceImporter.spec"
 
 Write-Host "== Building EXE ==" -ForegroundColor Cyan
@@ -77,6 +103,10 @@ $pyiArgs = @(
     "--windowed",
     "--uac-admin",
     "--name", $appName,
+    "--workpath", $workPath,
+    # Сгенерированный .spec кладём в рабочий каталог: в корне лежат свои,
+    # с относительными путями, и их незачем перетирать абсолютными.
+    "--specpath", $workPath,
     "--collect-all", "PySide6",
     "--collect-all", "shiboken6",
     "--collect-submodules", "win32com",
@@ -102,6 +132,15 @@ if (Test-Path $logoSvgPath) {
 }
 else {
     Write-Host "Предупреждение: SVG логотип не найден ($logoSvgPath)." -ForegroundColor Yellow
+}
+
+# theme.py ищет иконки рядом с пакетом (в сборке это _internal), иначе у выпадающих
+# списков пропадает стрелка.
+if (Test-Path $chevronSvgPath) {
+    $pyiArgs += @("--add-data", "$chevronSvgPath;.")
+}
+else {
+    Write-Host "Предупреждение: chevron-down.svg не найден ($chevronSvgPath)." -ForegroundColor Yellow
 }
 
 & $venvPython -m PyInstaller @pyiArgs

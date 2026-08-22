@@ -5,34 +5,46 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .version import is_win7_build
+from .version import EDITIONS, current_edition
 
 
-DEFAULT_UPDATE_MANIFEST_URL = (
-    "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest.json?ref=main"
-)
-WIN7_UPDATE_MANIFEST_URL = (
-    "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/latest-win7.json?ref=main"
-)
-NORMAL_UPDATE_MANIFEST_URLS = {
-    DEFAULT_UPDATE_MANIFEST_URL,
-    "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest.json",
-    "https://github.com/ahiokk/Dazzle/raw/main/updates/latest.json",
-}
-WIN7_UPDATE_MANIFEST_URLS = {
-    WIN7_UPDATE_MANIFEST_URL,
-    "https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/latest-win7.json",
-    "https://github.com/ahiokk/Dazzle/raw/main/updates/latest-win7.json",
-}
-LEGACY_UPDATE_MANIFEST_URLS = NORMAL_UPDATE_MANIFEST_URLS | WIN7_UPDATE_MANIFEST_URLS
+def _manifest_urls(manifest_file: str) -> set[str]:
+    """Все известные адреса одного и того же манифеста обновлений."""
+    return {
+        f"https://api.github.com/repos/ahiokk/Dazzle/contents/updates/{manifest_file}?ref=main",
+        f"https://raw.githubusercontent.com/ahiokk/Dazzle/main/updates/{manifest_file}",
+        f"https://github.com/ahiokk/Dazzle/raw/main/updates/{manifest_file}",
+    }
+
+
+def manifest_url_for(manifest_file: str) -> str:
+    return (
+        "https://api.github.com/repos/ahiokk/Dazzle/contents/updates/"
+        f"{manifest_file}?ref=main"
+    )
+
+
+DEFAULT_UPDATE_MANIFEST_URL = manifest_url_for("latest.json")
+WIN7_UPDATE_MANIFEST_URL = manifest_url_for("latest-win7.json")
+VAG_UPDATE_MANIFEST_URL = manifest_url_for("latest-vag.json")
+
+NORMAL_UPDATE_MANIFEST_URLS = _manifest_urls("latest.json")
+WIN7_UPDATE_MANIFEST_URLS = _manifest_urls("latest-win7.json")
+VAG_UPDATE_MANIFEST_URLS = _manifest_urls("latest-vag.json")
+
+# Адреса «чужих» редакций считаем устаревшими: при загрузке настроек их надо
+# заменить на манифест своей редакции, иначе VAG будет обновляться в AUTO255.
+LEGACY_UPDATE_MANIFEST_URLS: set[str] = set()
+for _edition in EDITIONS.values():
+    LEGACY_UPDATE_MANIFEST_URLS |= _manifest_urls(_edition.manifest_file)
 
 
 def default_update_manifest_url() -> str:
-    return WIN7_UPDATE_MANIFEST_URL if is_win7_build() else DEFAULT_UPDATE_MANIFEST_URL
+    return manifest_url_for(current_edition().manifest_file)
 
 
 def default_article_match_field() -> str:
-    return "barcode" if is_win7_build() else "product_code"
+    return current_edition().default_article_match_field
 
 
 @dataclass
@@ -41,7 +53,11 @@ class AppSettings:
     invoices_dir: str = ""
     markup_percent: float = 50.0
     round_step: float = 50.0
-    price_alert_threshold_percent: float = 35.0
+    # Магазин не продаёт дешевле этой наценки. Если товар в базе стоит дешевле,
+    # Dazzle сам поднимает цену продажи до минимума и пишет об этом в колонке
+    # «Предупреждение».
+    min_markup_percent: float = 50.0
+    enforce_min_markup: bool = True
     supplier_id: int = 1
     user_id: int = 1
     shop_id: int = 0
@@ -119,12 +135,12 @@ def load_app_settings() -> AppSettings:
         invoices_dir=str(raw.get("invoices_dir", defaults.invoices_dir) or ""),
         markup_percent=_to_float(raw.get("markup_percent"), defaults.markup_percent),
         round_step=max(1.0, _to_float(raw.get("round_step"), defaults.round_step)),
-        price_alert_threshold_percent=max(
+        min_markup_percent=max(
             0.0,
-            _to_float(
-                raw.get("price_alert_threshold_percent"),
-                defaults.price_alert_threshold_percent,
-            ),
+            _to_float(raw.get("min_markup_percent"), defaults.min_markup_percent),
+        ),
+        enforce_min_markup=_to_bool(
+            raw.get("enforce_min_markup"), defaults.enforce_min_markup
         ),
         supplier_id=_to_int(raw.get("supplier_id"), defaults.supplier_id),
         user_id=_to_int(raw.get("user_id"), defaults.user_id),

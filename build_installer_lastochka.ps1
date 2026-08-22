@@ -2,14 +2,16 @@ param(
     [string]$PythonVersion = "3.8",
     [string]$PythonExe = "python",
     [string]$AppVersion = "",
-    [switch]$RebuildExe
+    [switch]$RebuildExe,
+    [switch]$SkipDeps
 )
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
-$appName = "DazzleWin7"
+$appName = "DazzleWin7"   # имя exe не меняем: на нём завязано автообновление
+$setupPattern = "Dazzle-Lastochka-Win7-Setup-*.exe"
 
 function Get-AppVersionFromSource {
     $versionFile = Join-Path $projectRoot "tirika_importer\version.py"
@@ -48,14 +50,14 @@ function Get-IsccPath {
 
 $exePath = Join-Path $projectRoot "dist\$appName\$appName.exe"
 if ($RebuildExe -or -not (Test-Path $exePath)) {
-    Write-Host "== Building Win7 application EXE ==" -ForegroundColor Cyan
-    & "$projectRoot\build_exe_win7.ps1" -PythonVersion $PythonVersion -PythonExe $PythonExe
+    Write-Host "== Building Lastochka application EXE ==" -ForegroundColor Cyan
+    & "$projectRoot\build_exe_lastochka.ps1" -PythonVersion $PythonVersion -PythonExe $PythonExe -SkipDeps:$SkipDeps
     if ($LASTEXITCODE -ne 0) {
-        throw "Сборка Win7 EXE завершилась с ошибкой: $LASTEXITCODE"
+        throw "Сборка Lastochka EXE завершилась с ошибкой: $LASTEXITCODE"
     }
 }
 else {
-    Write-Host "== Reusing existing Win7 EXE ==" -ForegroundColor Cyan
+    Write-Host "== Reusing existing Lastochka EXE ==" -ForegroundColor Cyan
     Write-Host "Path: $exePath" -ForegroundColor DarkCyan
 }
 
@@ -66,10 +68,10 @@ if (-not $isccPath) {
 
 $outputDir = Join-Path $projectRoot "installer_output"
 if (Test-Path $outputDir) {
-    Get-ChildItem $outputDir -Filter "Dazzle-Win7-Setup-*.exe" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem $outputDir -Filter $setupPattern -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 
-Write-Host "== Building Win7 installer ==" -ForegroundColor Cyan
+Write-Host "== Building Lastochka installer ==" -ForegroundColor Cyan
 if (-not $AppVersion) {
     $AppVersion = Get-AppVersionFromSource
 }
@@ -77,18 +79,19 @@ if (-not $AppVersion) {
     $AppVersion = "1.0.0"
 }
 Write-Host "Installer version: $AppVersion" -ForegroundColor DarkCyan
-& $isccPath "/DAppVersion=$AppVersion" ".\installer_win7.iss"
+& $isccPath "/DAppVersion=$AppVersion" ".\installer_lastochka.iss"
 if ($LASTEXITCODE -ne 0) {
-    throw "Сборка Win7 установщика завершилась с ошибкой: $LASTEXITCODE"
+    throw "Сборка установщика Lastochka завершилась с ошибкой: $LASTEXITCODE"
 }
 
-$installer = Get-ChildItem $outputDir -Filter "Dazzle-Win7-Setup-*.exe" -File -ErrorAction SilentlyContinue |
+$installer = Get-ChildItem $outputDir -Filter $setupPattern -File -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
 if (-not $installer) {
-    throw "Win7 установщик не найден в папке: $outputDir"
+    throw "Установщик Lastochka не найден в папке: $outputDir"
 }
 
 Write-Host "== Done ==" -ForegroundColor Green
 Write-Host "Installer file: $($installer.FullName)" -ForegroundColor Green
+Write-Host "SHA256: $((Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower())" -ForegroundColor Green

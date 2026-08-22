@@ -2,14 +2,32 @@ param(
     [string]$PythonVersion = "3.13",
     [string]$PythonExe = "python",
     [string]$AppVersion = "",
-    [switch]$RebuildExe
+    [ValidateSet("auto255", "vag")]
+    [string]$Edition = "auto255",
+    [switch]$RebuildExe,
+    [switch]$SkipDeps
 )
+
+# Установщики редакций на PySide6 (Windows 10/11):
+#   auto255 -> installer_output\Dazzle-Setup-<version>.exe
+#   vag     -> installer_output\Dazzle-VAG-Setup-<version>.exe
+# Lastochka (Windows 7) собирается скриптом build_installer_lastochka.ps1.
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
-$appName = "Dazzle"
+
+if ($Edition -eq "vag") {
+    $appName = "DazzleVAG"
+    $issFile = ".\installer_vag.iss"
+    $setupPattern = "Dazzle-VAG-Win10-Setup-*.exe"
+}
+else {
+    $appName = "Dazzle"
+    $issFile = ".\installer.iss"
+    $setupPattern = "Dazzle-AUTO255-Win10-Setup-*.exe"
+}
 
 function Get-AppVersionFromSource {
     $versionFile = Join-Path $projectRoot "tirika_importer\version.py"
@@ -46,10 +64,12 @@ function Get-IsccPath {
     return $null
 }
 
+Write-Host "== Edition: $Edition ==" -ForegroundColor Cyan
+
 $exePath = Join-Path $projectRoot "dist\$appName\$appName.exe"
 if ($RebuildExe -or -not (Test-Path $exePath)) {
     Write-Host "== Building application EXE ==" -ForegroundColor Cyan
-    & "$projectRoot\build_exe.ps1" -PythonVersion $PythonVersion -PythonExe $PythonExe
+    & "$projectRoot\build_exe.ps1" -PythonVersion $PythonVersion -PythonExe $PythonExe -Edition $Edition -SkipDeps:$SkipDeps
     if ($LASTEXITCODE -ne 0) {
         throw "Сборка EXE завершилась с ошибкой: $LASTEXITCODE"
     }
@@ -66,7 +86,7 @@ if (-not $isccPath) {
 
 $outputDir = Join-Path $projectRoot "installer_output"
 if (Test-Path $outputDir) {
-    Get-ChildItem $outputDir -Filter "$appName-Setup-*.exe" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem $outputDir -Filter $setupPattern -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 
 Write-Host "== Building installer ==" -ForegroundColor Cyan
@@ -77,12 +97,12 @@ if (-not $AppVersion) {
     $AppVersion = "1.0.0"
 }
 Write-Host "Installer version: $AppVersion" -ForegroundColor DarkCyan
-& $isccPath "/DAppVersion=$AppVersion" ".\installer.iss"
+& $isccPath "/DAppVersion=$AppVersion" $issFile
 if ($LASTEXITCODE -ne 0) {
     throw "Сборка установщика завершилась с ошибкой: $LASTEXITCODE"
 }
 
-$installer = Get-ChildItem $outputDir -Filter "$appName-Setup-*.exe" -File -ErrorAction SilentlyContinue |
+$installer = Get-ChildItem $outputDir -Filter $setupPattern -File -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
@@ -92,3 +112,4 @@ if (-not $installer) {
 
 Write-Host "== Done ==" -ForegroundColor Green
 Write-Host "Installer file: $($installer.FullName)" -ForegroundColor Green
+Write-Host "SHA256: $((Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower())" -ForegroundColor Green

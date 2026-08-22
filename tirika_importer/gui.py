@@ -11,10 +11,18 @@ import traceback
 from .app_settings import AppSettings, load_app_settings, save_app_settings
 from .config import load_config
 from .db import (
+    MARKUP_BAND_EXTREME,
+    MARKUP_BAND_GOOD,
+    MARKUP_BAND_HIGH,
+    MARKUP_BAND_LOW,
+    MARKUP_BAND_NORMAL,
     ImportValidationError,
     TirikaDB,
     TirikaDBError,
+    calculate_markup_percent,
     calculate_suggested_sell_price,
+    enforce_min_markup_price,
+    markup_band,
     normalize_article,
     normalize_text_field,
 )
@@ -69,9 +77,11 @@ from .qt_compat import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QProxyStyle,
     QScrollArea,
     QSplitter,
     QStyle,
+    QStyleFactory,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QSvgWidget,
@@ -102,7 +112,13 @@ from .workers import (
 )
 from .startup import StartupError, disable_startup, enable_startup, is_enabled, is_supported
 from .updater import UpdateError, UpdateInfo, check_for_update, download_installer, run_installer
-from .version import APP_NAME, APP_VERSION, display_app_title
+from .version import (
+    APP_NAME,
+    APP_VERSION,
+    display_app_name,
+    display_app_title,
+    ozon_enabled,
+)
 
 
 from .constants import (
@@ -1596,15 +1612,41 @@ class SettingsDialog(QDialog):
         self.round_step_spin.setToolTip("Шаг округления в большую сторону (например, 50).")
         price_layout.addWidget(self.round_step_spin, 1, 1)
 
-        price_layout.addWidget(QLabel("Порог красного, %:"), 2, 0)
-        self.price_alert_spin = QDoubleSpinBox(self)
-        self.price_alert_spin.setRange(0.0, 1000.0)
-        self.price_alert_spin.setDecimals(1)
-        self.price_alert_spin.setValue(current.price_alert_threshold_percent)
-        self.price_alert_spin.setToolTip(
-            "Если новая продажная цена отличается от цены в базе на этот % и больше, строка краснеет."
+        price_layout.addWidget(QLabel("Минимальная наценка, %:"), 3, 0)
+        self.min_markup_spin = QDoubleSpinBox(self)
+        self.min_markup_spin.setRange(0.0, 500.0)
+        self.min_markup_spin.setDecimals(1)
+        self.min_markup_spin.setValue(current.min_markup_percent)
+        self.min_markup_spin.setToolTip(
+            "Ниже этой наценки магазин товар не продаёт. Если в базе цена ниже, "
+            "Dazzle сам поднимет цену продажи до этой наценки."
         )
-        price_layout.addWidget(self.price_alert_spin, 2, 1)
+        price_layout.addWidget(self.min_markup_spin, 3, 1)
+
+        self.enforce_min_markup_cb = QCheckBox(
+            "Не продавать дешевле минимальной наценки (поднимать цену автоматически)",
+            self,
+        )
+        self.enforce_min_markup_cb.setChecked(current.enforce_min_markup)
+        self.enforce_min_markup_cb.setToolTip(
+            "Строки, где цена в базе даёт наценку ниже минимума, получают новую "
+            "цену продажи и пояснение в колонке «Предупреждение»."
+        )
+        price_layout.addWidget(self.enforce_min_markup_cb, 4, 0, 1, 2)
+        self.enforce_min_markup_cb.toggled.connect(self.min_markup_spin.setEnabled)
+        self.min_markup_spin.setEnabled(current.enforce_min_markup)
+
+        price_layout.addWidget(QLabel("Цвета колонки «Наценка»:"), 5, 0)
+        self.markup_bands_label = QLabel(self)
+        self.markup_bands_label.setTextFormat(Qt.RichText)
+        self.markup_bands_label.setWordWrap(True)
+        self.markup_bands_label.setToolTip(
+            "Так подсвечивается наценка в накладной: сразу видно, где цена ушла "
+            "ниже минимума и где наценка неправдоподобно большая."
+        )
+        price_layout.addWidget(self.markup_bands_label, 5, 1)
+        self.min_markup_spin.valueChanged.connect(self._refresh_markup_bands_label)
+        self._refresh_markup_bands_label()
         general_layout.addWidget(price_group)
 
         mikado_group = QGroupBox("Микадо — заказ Zekkert", self)
@@ -1648,6 +1690,8 @@ class SettingsDialog(QDialog):
         mikado_hint.setObjectName("subtitleLabel")
         mikado_hint.setWordWrap(True)
         mk.addWidget(mikado_hint, 5, 0, 1, 2)
+        # Заказ у Микадо доступен только из вкладки Ozon (редакция AUTO255).
+        mikado_group.setVisible(ozon_enabled())
         general_layout.addWidget(mikado_group)
 
         import_group = QGroupBox("Импорт по умолчанию", self)
@@ -1873,13 +1917,21 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Автозапуск", f"Не удалось изменить автозапуск: {exc}")
 
+    def _refresh_markup_bands_label(self) -> None:
+        label = getattr(self, "markup_bands_label", None)
+        if label is None:
+            return
+        min_pct = float(self.min_markup_spin.value())
+        label.setText(_markup_legend_html(min_pct))
+
     def values(self) -> AppSettings:
         return AppSettings(
             db_path=self.db_path_edit.text().strip(),
             invoices_dir=self.invoices_dir_edit.text().strip(),
             markup_percent=float(self.markup_spin.value()),
             round_step=float(self.round_step_spin.value()),
-            price_alert_threshold_percent=float(self.price_alert_spin.value()),
+            min_markup_percent=float(self.min_markup_spin.value()),
+            enforce_min_markup=self.enforce_min_markup_cb.isChecked(),
             supplier_id=self._supplier_id,
             user_id=self._selected_data(self.user_combo, 1),
             shop_id=self._selected_data(self.shop_combo, 0),
@@ -2047,6 +2099,7 @@ class MainWindow(QMainWindow):
         self._orders_startup_notified = False
         self._orders_tab_index = 1
 
+        install_tooltip_delay()
         self._build_ui()
         self._apply_styles()
         self._set_ui_busy(True, "Инициализация...")
@@ -2103,8 +2156,9 @@ class MainWindow(QMainWindow):
             logo.setFixedSize(32, 32)
             header_layout.addWidget(logo, 0, Qt.AlignVCenter)
 
-        title = QLabel("Dazzle", self)
+        title = QLabel(display_app_name(), self)
         title.setObjectName("titleLabel")
+        title.setToolTip(f"{display_app_title()}")
         header_layout.addWidget(title, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
 
@@ -2366,6 +2420,14 @@ class MainWindow(QMainWindow):
         ):
             metric.setMinimumHeight(32)
 
+        # Легенда цветов колонки «Наценка» — чтобы продавец читал таблицу глазами.
+        self.footer_markup_legend = QLabel(self)
+        self.footer_markup_legend.setTextFormat(Qt.RichText)
+        self.footer_markup_legend.setMinimumHeight(32)
+        self.footer_markup_legend.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        footer_layout.addWidget(self.footer_markup_legend)
+        self._refresh_markup_legend()
+
         footer_layout.addStretch(1)
 
         self.import_btn = QPushButton("Импорт в базу", self)
@@ -2383,10 +2445,15 @@ class MainWindow(QMainWindow):
         self._orders_tab_index = self.main_tabs.addTab(
             self.orders_widget, "Заказы и напоминания"
         )
-        self.ozon_tab = self._build_ozon_tab()
-        self.main_tabs.addTab(self.ozon_tab, "Ozon")
+        # Ozon — только в редакции AUTO255. Остальным магазинам вкладка не нужна.
+        if ozon_enabled():
+            self.ozon_tab = self._build_ozon_tab()
+            self.main_tabs.addTab(self.ozon_tab, "Ozon")
+            self.main_tabs.currentChanged.connect(lambda _i: self._ensure_ozon_panel())
+        else:
+            self.ozon_tab = None
+            self._ozon_panel = None
         root.addWidget(self.main_tabs, 1)
-        self.main_tabs.currentChanged.connect(lambda _i: self._ensure_ozon_panel())
 
         self.settings_btn.clicked.connect(self._open_settings_dialog)
         self.ozon_btn.clicked.connect(self._open_ozon_dialog)
@@ -2871,6 +2938,15 @@ class MainWindow(QMainWindow):
             return
         markup_value = _fmt_number(float(self.app_settings.markup_percent), 1)
         self.apply_suggested_price_btn.setText(f"Применить наценку +{markup_value}%")
+        self._refresh_markup_legend()
+
+    def _refresh_markup_legend(self) -> None:
+        label = getattr(self, "footer_markup_legend", None)
+        if label is None:
+            return
+        min_pct = float(self.app_settings.min_markup_percent)
+        label.setText("Наценка: " + _markup_legend_html(min_pct))
+        label.setToolTip(_markup_legend_text(min_pct))
 
     @staticmethod
     def _set_combo_by_data(combo: QComboBox, target: int) -> None:
@@ -2980,6 +3056,8 @@ class MainWindow(QMainWindow):
         return tab
 
     def _ensure_ozon_panel(self) -> None:
+        if not ozon_enabled():
+            return
         if getattr(self, "_ozon_panel", None) is not None:
             return
         if self.db is None or self.matcher is None:
@@ -3071,6 +3149,8 @@ class MainWindow(QMainWindow):
             self._log(f"Уведомление не показано ({exc}).")
 
     def _open_ozon_dialog(self) -> None:
+        if not ozon_enabled():
+            return
         if self._is_ui_busy():
             return
         if self.db is None or self.matcher is None:
@@ -3412,6 +3492,7 @@ class MainWindow(QMainWindow):
                     self._record_history_state()
             line_count = int(data.get("line_count", 0) or 0)
             self._log(f"Автосопоставление выполнено: строк={line_count}.")
+            self._log_min_markup_summary()
         except Exception as exc:
             self._error("Ошибка завершения сопоставления", exc=exc)
         finally:
@@ -3689,6 +3770,7 @@ class MainWindow(QMainWindow):
                 line.match_status in {"ambiguous", "hint", "not_found"}
                 or line.action == "create"
                 or bool(line.warning.strip())
+                or bool(line.raw_data.get("_min_markup_raised", False))
             ):
                 out.append(line)
         return out
@@ -3714,6 +3796,8 @@ class MainWindow(QMainWindow):
                     buy_price=line.price,
                     sell_price=markup_price,
                 )
+                row_hint = self._row_hint(line)
+                warning_hint = self._warning_hint(line)
                 values = [
                     str(line.line_no),
                     line.article,
@@ -3780,6 +3864,14 @@ class MainWindow(QMainWindow):
                         font = item.font()
                         font.setBold(True)
                         item.setFont(font)
+                    # Подсказка при наведении: полный текст ячейки + сводка по строке.
+                    cell_text = str(value).strip()
+                    if col == COL_WARNING:
+                        item.setToolTip(warning_hint or row_hint)
+                    elif col in TOOLTIP_TEXT_COLUMNS and cell_text and cell_text != row_hint:
+                        item.setToolTip(cell_text)
+                    else:
+                        item.setToolTip(row_hint)
                     self.table.setItem(row, col, item)
 
                 status_color = self._status_color(line.match_status)
@@ -3790,13 +3882,7 @@ class MainWindow(QMainWindow):
                             item.setBackground(status_color)
                             item.setForeground(QColor(20, 20, 20))
 
-                if line.price_alert:
-                    for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF, COL_MARKUP):
-                        item = self.table.item(row, col)
-                        if item is not None:
-                            item.setBackground(QColor(255, 184, 184))
-                            item.setForeground(QColor(92, 0, 0))
-                elif line.raw_data.get("_price_applied", False):
+                if line.raw_data.get("_price_applied", False):
                     for col in (COL_SELL_PRICE, COL_SELL_PRICE_OLD, COL_SELL_DIFF, COL_MARKUP):
                         item = self.table.item(row, col)
                         if item is not None:
@@ -3815,16 +3901,40 @@ class MainWindow(QMainWindow):
                         item = self.table.item(row, col)
                         if item is not None:
                             item.setBackground(QColor(232, 243, 255))
-                    if not line.price_alert:
-                        sell_item = self.table.item(row, COL_SELL_PRICE)
-                        if sell_item is not None:
-                            sell_item.setBackground(QColor(232, 243, 255))
+                    sell_item = self.table.item(row, COL_SELL_PRICE)
+                    if sell_item is not None:
+                        sell_item.setBackground(QColor(232, 243, 255))
+
+                # Наценка — самая важная колонка накладной: красим её последней,
+                # чтобы диапазон было видно поверх остальных подсветок.
+                markup_item = self.table.item(row, COL_MARKUP)
+                if markup_item is not None:
+                    markup_item.setToolTip(row_hint)
+                    band = markup_band(
+                        markup_pct,
+                        min_markup_percent=self.app_settings.min_markup_percent,
+                    )
+                    band_colors = MARKUP_BAND_COLORS.get(band or "")
+                    if band_colors is not None:
+                        background, foreground = band_colors
+                        markup_item.setBackground(QColor(background))
+                        markup_item.setForeground(QColor(foreground))
+                        band_font = markup_item.font()
+                        band_font.setBold(True)
+                        markup_item.setFont(band_font)
+
+                if line.raw_data.get("_min_markup_raised", False):
+                    warning_item = self.table.item(row, COL_WARNING)
+                    if warning_item is not None:
+                        warning_item.setBackground(QColor("#FFF3CD"))
+                        warning_item.setForeground(QColor("#7A3E00"))
 
                 combo = QComboBox(self.table)
                 combo.addItem("import")
                 combo.addItem("create")
                 combo.addItem("skip")
                 combo.setFixedHeight(24)
+                combo.setToolTip(row_hint)
                 action = line.action if line.action in {"import", "create", "skip"} else "skip"
                 combo.setCurrentText(action)
                 self._apply_action_combo_visual(combo, action)
@@ -4272,18 +4382,18 @@ class MainWindow(QMainWindow):
             elif abs(line.sell_price - existing_sell) <= 0.0001:
                 line.raw_data.pop("_price_applied", None)
 
+        self._enforce_min_markup(line)
+
         if existing_sell is None:
             line.sell_price_diff_percent = None
-            line.price_alert = False
             return
 
-        # When sale price is accepted for DB update, red alert is no longer needed.
+        # Если новая цена принимается в базу, расхождения с базой уже нет.
         will_update_sell = self.app_settings.update_existing_sell_price or bool(
             line.raw_data.get("_force_update_sell_price", False)
         )
         if will_update_sell:
             line.sell_price_diff_percent = 0.0
-            line.price_alert = False
             return
 
         if existing_sell <= 0:
@@ -4291,7 +4401,133 @@ class MainWindow(QMainWindow):
         else:
             diff_pct = abs((line.sell_price or 0.0) - existing_sell) / existing_sell * 100.0
         line.sell_price_diff_percent = diff_pct
-        line.price_alert = diff_pct >= self.app_settings.price_alert_threshold_percent
+
+    def _enforce_min_markup(self, line: InvoiceLine) -> None:
+        """Не даём продавать дешевле минимальной наценки магазина.
+
+        Если цена, которая после импорта окажется в базе, даёт наценку меньше
+        минимума, поднимаем цену продажи до минимальной и помечаем строку —
+        текст для продавца собирается в `_min_markup_message`.
+        """
+        raw = line.raw_data
+        if not self.app_settings.enforce_min_markup:
+            for key in (
+                "_min_markup_raised",
+                "_min_markup_old_price",
+                "_min_markup_old_pct",
+                "_min_markup_new_price",
+                "_min_markup_new_pct",
+            ):
+                raw.pop(key, None)
+            return
+
+        min_pct = float(self.app_settings.min_markup_percent)
+        buy_price = float(line.price or 0.0)
+        if min_pct <= 0 or buy_price <= 0 or line.action == "skip":
+            return
+
+        # Цена, которая реально будет в базе после импорта: либо старая из базы,
+        # либо новая (если строка помечена к обновлению цены продажи).
+        effective = self._display_sell_price_in_db(line)
+        if effective is None:
+            effective = line.sell_price
+        if effective is None:
+            return
+
+        floor_price = enforce_min_markup_price(
+            buy_price,
+            effective,
+            min_markup_percent=min_pct,
+            round_step=self.app_settings.round_step,
+        )
+        if floor_price is not None:
+            # Поднимаем до рассчитанной цены продажи (обычная наценка магазина),
+            # но не ниже минимума — если обычная наценка вдруг меньше минимальной.
+            new_price = max(float(line.sell_price or 0.0), floor_price)
+            line.sell_price = new_price
+            raw["_sell_initialized"] = True
+            if (
+                line.existing_sell_price is not None
+                and abs(new_price - line.existing_sell_price) > 0.0001
+            ):
+                # Иначе поднятая цена никогда не доедет до базы.
+                raw["_force_update_sell_price"] = True
+            if "_min_markup_old_price" not in raw:
+                raw["_min_markup_old_price"] = float(effective)
+                raw["_min_markup_old_pct"] = calculate_markup_percent(buy_price, effective)
+            raw["_min_markup_raised"] = True
+
+        if raw.get("_min_markup_raised", False):
+            shown = self._display_sell_price_in_db(line)
+            if shown is None:
+                shown = line.sell_price
+            raw["_min_markup_new_price"] = float(shown or 0.0)
+            raw["_min_markup_new_pct"] = calculate_markup_percent(buy_price, shown)
+
+    def _row_hint(self, line: InvoiceLine) -> str:
+        """Короткая подсказка по строке: артикул и полное название товара."""
+        return " · ".join(
+            x.strip() for x in (line.article, line.matched_name or line.name) if x.strip()
+        )
+
+    def _warning_hint(self, line: InvoiceLine) -> str:
+        """Расшифровка колонки «Предупреждение» для подсказки."""
+        parts: list[str] = []
+        min_markup_note = self._min_markup_message_full(line)
+        if min_markup_note:
+            parts.append(min_markup_note)
+        if line.warning.strip():
+            parts.append(line.warning.strip())
+        return "\n".join(parts)
+
+    def _log_min_markup_summary(self) -> None:
+        if self.current_invoice is None:
+            return
+        raised = [
+            line
+            for line in self.current_invoice.lines
+            if line.raw_data.get("_min_markup_raised", False)
+        ]
+        if not raised:
+            return
+        min_text = _fmt_number(float(self.app_settings.min_markup_percent), 0)
+        numbers = ", ".join(str(line.line_no) for line in raised[:20])
+        if len(raised) > 20:
+            numbers = f"{numbers} и ещё {len(raised) - 20}"
+        self._log(
+            f"Минимальная наценка {min_text}%: цена продажи поднята в {len(raised)} "
+            f"строках (строки {numbers}). Подробности — в колонке «Предупреждение»."
+        )
+
+    def _min_markup_message(self, line: InvoiceLine) -> str:
+        """Короткая пометка в таблице: «35% → 50%». Подробности — в подсказке."""
+        raw = line.raw_data
+        if not raw.get("_min_markup_raised", False):
+            return ""
+        old_pct = raw.get("_min_markup_old_pct")
+        new_pct = raw.get("_min_markup_new_pct")
+        if old_pct is None or new_pct is None:
+            return ""
+        return f"{_fmt_number(float(old_pct), 0)}% → {_fmt_number(float(new_pct), 0)}%"
+
+    def _min_markup_message_full(self, line: InvoiceLine) -> str:
+        """Полное пояснение для всплывающей подсказки."""
+        raw = line.raw_data
+        if not raw.get("_min_markup_raised", False):
+            return ""
+        old_pct = raw.get("_min_markup_old_pct")
+        new_pct = raw.get("_min_markup_new_pct")
+        old_price = raw.get("_min_markup_old_price")
+        new_price = raw.get("_min_markup_new_price")
+        if old_pct is None or new_pct is None:
+            return ""
+        return (
+            f"Товар продавался с наценкой {_fmt_number(float(old_pct), 0)}% — "
+            f"это ниже минимума {_fmt_number(float(self.app_settings.min_markup_percent), 0)}%. "
+            f"Цена продажи поднята: {_fmt_number(float(old_price or 0.0), 2)} → "
+            f"{_fmt_number(float(new_price or 0.0), 2)} "
+            f"(наценка {_fmt_number(float(new_pct), 0)}%)."
+        )
 
     def _display_sell_price_in_db(self, line: InvoiceLine) -> float | None:
         existing_sell = line.existing_sell_price
@@ -4312,21 +4548,15 @@ class MainWindow(QMainWindow):
         buy_price: float | None,
         sell_price: float | None,
     ) -> float | None:
-        if buy_price is None or sell_price is None:
-            return None
-        if buy_price <= 0:
-            return None
-        return ((sell_price - buy_price) / buy_price) * 100.0
+        return calculate_markup_percent(buy_price, sell_price)
 
     def _display_warning(self, line: InvoiceLine) -> str:
         parts: list[str] = []
+        min_markup_note = self._min_markup_message(line)
+        if min_markup_note:
+            parts.append(min_markup_note)
         if line.warning.strip():
             parts.append(line.warning.strip())
-        if line.price_alert and line.sell_price_diff_percent is not None:
-            parts.append(
-                "Расхождение продажи: "
-                f"{line.sell_price_diff_percent:.1f}% (порог {self.app_settings.price_alert_threshold_percent:.1f}%)"
-            )
         return " | ".join(parts)
 
     def _status_text(self, status: str) -> str:
@@ -4358,7 +4588,12 @@ class MainWindow(QMainWindow):
         total = len(lines)
         ambiguous = sum(1 for x in lines if x.match_status == "ambiguous")
         missing = sum(1 for x in lines if x.match_status == "not_found")
-        warning_count = sum(1 for x in lines if bool(x.warning.strip()) or x.price_alert)
+        warning_count = sum(
+            1
+            for x in lines
+            if bool(x.warning.strip())
+            or bool(x.raw_data.get("_min_markup_raised", False))
+        )
         return found, total, ambiguous, missing, warning_count
 
     def _build_summary(self, lines: list[InvoiceLine]) -> str:
@@ -4454,6 +4689,90 @@ def _fmt_number(value: float, digits: int) -> str:
     if "." in out:
         out = out.rstrip("0").rstrip(".")
     return out
+
+
+TOOLTIP_WAKE_UP_MS = 2000
+
+
+class ToolTipDelayStyle(QProxyStyle):
+    """Подсказки появляются через паузу и не «залипают» при переходе между строками.
+
+    Qt по умолчанию ждёт ~0.7 с перед первой подсказкой, а следующие ещё 2 с
+    показывает мгновенно — из-за этого при движении мышью по таблице подсказки
+    выскакивают непрерывно.
+    """
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.SH_ToolTip_WakeUpDelay:
+            return TOOLTIP_WAKE_UP_MS
+        if hint == QStyle.SH_ToolTip_FallAsleepDelay:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def install_tooltip_delay() -> None:
+    app = QApplication.instance()
+    if app is None or getattr(app, "_dazzle_tooltip_delay", False):
+        return
+    try:
+        base_name = app.style().objectName()
+        base_style = QStyleFactory.create(base_name) if base_name else None
+        app.setStyle(ToolTipDelayStyle(base_style) if base_style else ToolTipDelayStyle())
+        app._dazzle_tooltip_delay = True
+    except Exception:  # noqa: BLE001 — подсказки не критичны для работы
+        pass
+
+
+# Колонки с длинным текстом: в подсказке показываем ещё и полное содержимое ячейки,
+# чтобы не приходилось расширять колонку ради чтения.
+TOOLTIP_TEXT_COLUMNS = (
+    COL_NAME,
+    COL_NOTE,
+    COL_GOOD_CODE,
+    COL_GOOD_NAME,
+    COL_SIMILAR,
+    COL_WARNING,
+)
+
+# Подсветка колонки «Наценка»: цвет фона и цвет текста для каждого диапазона.
+MARKUP_BAND_COLORS: dict[str, tuple[str, str]] = {
+    MARKUP_BAND_LOW: ("#FFCDD2", "#8C0000"),      # ниже минимума — красный
+    MARKUP_BAND_NORMAL: ("#FFE0B2", "#7A3E00"),   # 50–75% — оранжевый
+    MARKUP_BAND_GOOD: ("#C8E6C9", "#1B5E20"),     # 75–100% — зелёный
+    MARKUP_BAND_HIGH: ("#FFF59D", "#5E5000"),     # 100–200% — жёлтый
+    MARKUP_BAND_EXTREME: ("#FFCDD2", "#8C0000"),  # выше 200% — красный
+}
+
+
+def _markup_legend_text(min_markup_percent: float) -> str:
+    min_text = _fmt_number(float(min_markup_percent), 1)
+    return (
+        f"Наценка: ниже {min_text}% — красный, "
+        f"{min_text}–75% — оранжевый, 75–100% — зелёный, "
+        "100–200% — жёлтый, выше 200% — красный."
+    )
+
+
+def _markup_legend_bands(min_markup_percent: float) -> tuple[tuple[str, str], ...]:
+    min_text = _fmt_number(float(min_markup_percent), 0)
+    return (
+        (MARKUP_BAND_LOW, f"&lt;{min_text}%"),
+        (MARKUP_BAND_NORMAL, f"{min_text}–75%"),
+        (MARKUP_BAND_GOOD, "75–100%"),
+        (MARKUP_BAND_HIGH, "100–200%"),
+        (MARKUP_BAND_EXTREME, "&gt;200%"),
+    )
+
+
+def _markup_legend_html(min_markup_percent: float) -> str:
+    chips: list[str] = []
+    for band, caption in _markup_legend_bands(min_markup_percent):
+        background, foreground = MARKUP_BAND_COLORS[band]
+        chips.append(
+            f'<span style="background:{background};color:{foreground};">'
+            f"&nbsp;{caption}&nbsp;</span>"
+        )
+    return " ".join(chips)
 
 
 def _same_path(left: Path, right: Path) -> bool:

@@ -30,6 +30,7 @@ all_articles_from_db.txt
 primary_articles_unique.txt
 primary_articles_with_name_manufacturer_sorted.json
 frida_test_log.txt
+examples/demo_nakladnaya.xls
 *.part
 /Tirika Shop/
 

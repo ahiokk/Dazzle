@@ -44,7 +44,6 @@ class InvoiceLine:
     sell_price: float | None = None
     suggested_sell_price: float | None = None
     sell_price_diff_percent: float | None = None
-    price_alert: bool = False
     similar_articles: str = ""
     matched_tax_mode: int = 0
     candidates: list[MatchCandidate] = field(default_factory=list)
