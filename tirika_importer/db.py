@@ -1328,6 +1328,7 @@ class TirikaDB:
             cur=cur,
             good_id=new_good_id,
             supplier_name=line.source_supplier,
+            article=article,
         )
 
         line.matched_product_code = article
@@ -1390,20 +1391,33 @@ class TirikaDB:
         )
         return new_group_id
 
-    def _insert_auto_cross_code(self, cur: sqlite3.Cursor, good_id: int, supplier_name: str) -> None:
+    def _insert_auto_cross_code(
+        self,
+        cur: sqlite3.Cursor,
+        good_id: int,
+        supplier_name: str,
+        article: str = "",
+    ) -> None:
         if not {"good_id", "cross_code"} <= self._table_columns(cur, "cross_codes"):
             return
         supplier = normalize_text_field(supplier_name, max_len=80)
         supplier = "-".join(supplier.split()) if supplier else "unknown"
-        cross_code = f"Dazzle-auto-made-from-{supplier}"
-        self._insert_row(
-            cur,
-            "cross_codes",
-            {
-                "good_id": good_id,
-                "cross_code": encode_db_text(cross_code),
-            },
-        )
+        cross_codes = [f"Dazzle-auto-made-from-{supplier}"]
+        # Магазин просил, чтобы артикул созданного товара сразу попадал в кроссы:
+        # так следующая накладная найдёт товар по кросс-коду, даже если продавец
+        # заведёт основной код иначе.
+        cross_article = normalize_text_field(article, max_len=80)
+        if cross_article and cross_article not in cross_codes:
+            cross_codes.append(cross_article)
+        for cross_code in cross_codes:
+            self._insert_row(
+                cur,
+                "cross_codes",
+                {
+                    "good_id": good_id,
+                    "cross_code": encode_db_text(cross_code),
+                },
+            )
 
     def _upsert_remainders(self, cur: sqlite3.Cursor, shop_id: int, good_id: int, quantity: float) -> None:
         rem_cols = self._table_columns(cur, "remainders")
