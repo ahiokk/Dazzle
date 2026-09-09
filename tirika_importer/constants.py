@@ -50,6 +50,9 @@ MONO_COLUMNS = (
 
 MAX_HISTORY_STATES = 80
 ROLE_SELL_DB_OLD_PRICE = Qt.UserRole + 101
+# Цвет ячейки до подсветки skip: по нему строка возвращается в исходный вид,
+# когда продавец снимает пропуск, — без перерисовки всей таблицы.
+ROLE_BASE_BACKGROUND = Qt.UserRole + 102
 
 OZ_COL_LINE = 0
 OZ_COL_ORDER = 1

@@ -145,6 +145,7 @@ from .constants import (
     DB_ONLY_COLUMNS,
     MONO_COLUMNS,
     MAX_HISTORY_STATES,
+    ROLE_BASE_BACKGROUND,
     ROLE_SELL_DB_OLD_PRICE,
     # Колонки вкладки Ozon переехали в ozon_gui.py вместе с самой вкладкой.
     PAYMENT_OPTIONS,
@@ -3128,14 +3129,16 @@ class MainWindow(QMainWindow):
                         warning_item.setBackground(QColor("#FFF3CD"))
                         warning_item.setForeground(QColor("#7A3E00"))
 
+                # Запоминаем цвет ячейки до подсветки skip: по нему строка
+                # вернётся в исходный вид, когда продавец снимет пропуск.
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item is not None:
+                        item.setData(ROLE_BASE_BACKGROUND, item.background())
+
                 # Пропускаемую строку красим последней, поверх всех подсветок,
                 # чтобы вся линия читалась целиком.
-                if line.action == "skip":
-                    skip_color = QColor(SKIP_ROW_COLOR)
-                    for col in range(self.table.columnCount()):
-                        item = self.table.item(row, col)
-                        if item is not None:
-                            item.setBackground(skip_color)
+                self._apply_skip_tint(row, line.action == "skip")
 
                 combo = QComboBox(self.table)
                 combo.addItem("import")
@@ -3350,17 +3353,25 @@ class MainWindow(QMainWindow):
             line.action = action
             if changed:
                 self._record_history_state()
-                # Подсветка строки зависит от действия, поэтому перерисовываем
-                # таблицу. Делаем это следующим тактом event loop: сейчас мы
-                # внутри сигнала самого QComboBox, а _populate_table его удалит.
-                QTimer.singleShot(0, self._repopulate_after_action_change)
+                # Перекрашиваем только эту строку. Полная перерисовка таблицы
+                # тут недопустима: на накладной в 200 строк она занимает почти
+                # две секунды, и продавец ловил бы подвисание на каждый клик.
+                self._apply_skip_tint(row, action == "skip")
             self._apply_table_filter()
 
-    def _repopulate_after_action_change(self) -> None:
-        if self.current_invoice is None:
-            return
-        self._populate_table(self.current_invoice.lines)
-        self._apply_table_filter()
+    def _apply_skip_tint(self, row: int, skip: bool) -> None:
+        """Закрасить строку как пропускаемую или вернуть исходные цвета ячеек."""
+        skip_color = QColor(SKIP_ROW_COLOR)
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item is None:
+                continue
+            if skip:
+                item.setBackground(skip_color)
+                continue
+            base = item.data(ROLE_BASE_BACKGROUND)
+            if base is not None:
+                item.setBackground(base)
 
     def _selected_rows(self) -> list[int]:
         if self.current_invoice is None:
