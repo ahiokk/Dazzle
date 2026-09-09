@@ -146,6 +146,7 @@ def _parse_mikado_html(path: Path) -> ParsedInvoice:
         lines=lines,
         invoice_number=invoice_number,
         invoice_date=invoice_date,
+        parse_warnings=_missing_name_column_warning(name_col, "МИКАДО"),
     )
 
 
@@ -224,6 +225,7 @@ def _parse_akvilon_excel(path: Path) -> ParsedInvoice:
         supplier_hint="АКВИЛОН",
         source_type="akvilon_excel",
         lines=lines,
+        parse_warnings=_missing_name_column_warning(name_col, "АКВИЛОН"),
     )
 
 
@@ -313,6 +315,7 @@ def _parse_forum_paid_excel(path: Path) -> ParsedInvoice:
         source_type="forum_paid_excel",
         lines=lines,
         invoice_number=invoice_number,
+        parse_warnings=_missing_name_column_warning(name_col, "ФОРУМ"),
     )
 
 
@@ -395,6 +398,7 @@ def _parse_moskvorechie_excel(path: Path) -> ParsedInvoice:
         supplier_hint="МОСКВОРЕЧЬЕ",
         source_type="moskvorechie_excel",
         lines=lines,
+        parse_warnings=_missing_name_column_warning(name_col, "МОСКВОРЕЧЬЕ"),
     )
 
 
@@ -564,6 +568,23 @@ def _pick_first_positive_float(row: list[Any], cols: list[int | None]) -> float:
         if value != 0:
             fallback = value
     return fallback
+
+
+def _missing_name_column_warning(name_col: int | None, supplier: str) -> list[str]:
+    """Поставщик не прислал колонку с названием — почти всегда битая выгрузка.
+
+    Товары, которые нашлись в базе, импортируются как обычно (название берётся
+    оттуда), а вот новый товар без названия не создать. Поймать это надо сразу
+    после загрузки, а не в конце, когда продавец уже разобрал всю накладную.
+    """
+    if name_col is not None:
+        return []
+    return [
+        f"В накладной {supplier} нет колонки с названием товара. "
+        "Найденные в базе позиции загрузятся как обычно, но для новых товаров "
+        "название придётся вписать вручную. Обычно это значит, что файл "
+        "выгрузился криво — проще скачать накладную заново."
+    ]
 
 
 def _find_col(cols: list[str], needles: list[str]) -> int | None:

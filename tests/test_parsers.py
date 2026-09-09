@@ -78,3 +78,47 @@ def test_ozon_without_any_price_column_reports_both_names(tmp_path):
         assert "Ваша цена / Предельная цена" in str(exc)
     else:
         raise AssertionError("ожидали OzonParseError")
+
+
+def _write_mikado_html(path, headers, row):
+    """Накладная Микадо — это HTML с расширением .xls."""
+    head = "".join("<TH>%s</TH>" % h for h in headers)
+    body = "".join("<TD>%s</TD>" % c for c in row)
+    path.write_text(
+        "<html><head></head><body><TABLE border=1>"
+        "<H3>Накладная №<b>6062203</b> от <b>07/09/2026г.</b></h3>"
+        "<TABLE border=1><TR>%s</TR><TR>%s</TR></TABLE></body></html>" % (head, body),
+        encoding="cp1251",
+    )
+    return path
+
+
+MIKADO_FULL = ["Nпп", "Примеч", "*", "Код", "К-во", "Цена", "Сумма", "Название", "Прим."]
+MIKADO_ROW_FULL = ["1", "&nbsp;", "*", "xzk-bs-1600", "1", "826.44", "826.44", "Колодки", "&nbsp;"]
+
+# Так Микадо выгрузил накладную 08.09.2026: колонки с названием нет вовсе.
+MIKADO_NO_NAME = ["Nпп", "Примеч", "*", "Код", "К-во", "Цена", "Сумма", "Прим."]
+MIKADO_ROW_NO_NAME = ["1", "&nbsp;", "*", "xzk-bs-1600", "1", "826.44", "826.44", "&nbsp;"]
+
+
+def test_mikado_invoice_without_name_column_warns(tmp_path):
+    from tirika_importer.parsers import parse_invoice_file
+
+    path = _write_mikado_html(tmp_path / "Invoice.xls", MIKADO_NO_NAME, MIKADO_ROW_NO_NAME)
+    invoice = parse_invoice_file(path)
+
+    assert len(invoice.lines) == 1
+    assert invoice.lines[0].article == "BS1600"      # строка всё равно читается
+    assert invoice.lines[0].name == ""
+    assert len(invoice.parse_warnings) == 1
+    assert "нет колонки с названием" in invoice.parse_warnings[0]
+
+
+def test_mikado_normal_invoice_has_no_parse_warnings(tmp_path):
+    from tirika_importer.parsers import parse_invoice_file
+
+    path = _write_mikado_html(tmp_path / "Invoice.xls", MIKADO_FULL, MIKADO_ROW_FULL)
+    invoice = parse_invoice_file(path)
+
+    assert invoice.lines[0].name == "Колодки"
+    assert invoice.parse_warnings == []

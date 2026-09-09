@@ -80,6 +80,10 @@ class AppSettings:
     update_manifest_url: str = field(default_factory=default_update_manifest_url)
     auto_check_updates: bool = True
     ignored_update_version: str = ""
+    # Когда проверка обновлений последний раз реально достучалась до манифеста.
+    # Пусто — не проходила ни разу: повод заглянуть в лог, а не гадать, почему
+    # магазин сидит на старой версии.
+    last_update_check: str = ""
     # Заказы и напоминания
     order_customer_name: str = ""  # пусто => автоопределение контрагента «ЗАКАЗ»
     orders_notify_on_startup: bool = True

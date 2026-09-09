@@ -58,6 +58,10 @@ class ParsedInvoice:
     invoice_number: str = ""
     invoice_date: datetime | None = None
     currency: str = "RUB"
+    # Претензии к самому файлу, а не к строкам: чего не хватило в выгрузке
+    # поставщика. Показываются сразу после загрузки, чтобы кривой файл был
+    # виден до того, как продавец разберёт всю накладную.
+    parse_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
