@@ -35,3 +35,46 @@ def test_looks_like_html(tmp_path):
     p2 = tmp_path / "binary.xls"
     p2.write_bytes(b"PK\x03\x04 binary xlsx zip header, not html")
     assert not _looks_like_html(p2)
+
+
+def _write_ozon_csv(path, price_header):
+    """Мини-выгрузка отправлений Ozon с одной товарной строкой."""
+    headers = [
+        "Номер заказа", "Номер отправления", "Статус", "Сумма отправления",
+        "Название товара", "SKU", "Артикул", price_header,
+        "Оплачено покупателем", "Количество",
+    ]
+    values = [
+        "75756470-0645", "75756470-0645-1", "Ожидает сборки", "1058.00",
+        "Комплект тормозных колодок", "842425235", "BR14961", "1058.00",
+        "531.43", "1",
+    ]
+    text = ";".join('"%s"' % h for h in headers) + "\n" + ";".join('"%s"' % v for v in values) + "\n"
+    path.write_text(text, encoding="utf-8-sig")
+    return path
+
+
+def test_ozon_accepts_both_price_column_names(tmp_path):
+    """Ozon переименовал «Ваша цена» в «Предельная цена» — грузим оба варианта."""
+    from tirika_importer.ozon import parse_ozon_csv
+
+    for header in ("Ваша цена", "Предельная цена"):
+        parsed = parse_ozon_csv(_write_ozon_csv(tmp_path / "postings.csv", header))
+        assert len(parsed.lines) == 1, header
+        line = parsed.lines[0]
+        assert line.article == "BR14961"
+        assert line.source_unit_price == 1058.0
+        assert line.paid_unit_price == 531.43
+        assert line.action == "import"
+
+
+def test_ozon_without_any_price_column_reports_both_names(tmp_path):
+    from tirika_importer.ozon import OzonParseError, parse_ozon_csv
+
+    path = _write_ozon_csv(tmp_path / "postings.csv", "Какая-то чужая колонка")
+    try:
+        parse_ozon_csv(path)
+    except OzonParseError as exc:
+        assert "Ваша цена / Предельная цена" in str(exc)
+    else:
+        raise AssertionError("ожидали OzonParseError")

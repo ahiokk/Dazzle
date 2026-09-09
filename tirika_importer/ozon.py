@@ -16,10 +16,15 @@ OZON_REQUIRED_COLUMNS = {
     "Название товара",
     "SKU",
     "Артикул",
-    "Ваша цена",
     "Оплачено покупателем",
     "Количество",
 }
+
+# Цена продавца за единицу. В сентябре 2026 Ozon переименовал в выгрузке
+# отправлений колонку «Ваша цена» в «Предельная цена» (значение то же:
+# цена после скидок продавца, умноженная на количество даёт «Сумма
+# отправления»). Принимаем оба названия, чтобы старые файлы тоже грузились.
+OZON_PRICE_COLUMN_ALIASES = ("Ваша цена", "Предельная цена")
 
 
 class OzonParseError(RuntimeError):
@@ -37,6 +42,8 @@ def parse_ozon_csv(path: Path) -> ParsedOzonCsv:
 
     headers = set(rows[0].keys())
     missing = sorted(OZON_REQUIRED_COLUMNS - headers)
+    if not headers.intersection(OZON_PRICE_COLUMN_ALIASES):
+        missing.append(" / ".join(OZON_PRICE_COLUMN_ALIASES))
     if missing:
         raise OzonParseError("CSV Ozon не похож на файл отправлений. Нет колонок: " + ", ".join(missing))
 
@@ -52,7 +59,7 @@ def parse_ozon_csv(path: Path) -> ParsedOzonCsv:
         name = _cell(row, "Название товара")
         sku = _cell(row, "SKU")
         source_quantity = _parse_float(_cell(row, "Количество"), default=0.0)
-        source_unit_price = _parse_float(_cell(row, "Ваша цена"), default=0.0)
+        source_unit_price = _parse_float(_cell_any(row, OZON_PRICE_COLUMN_ALIASES), default=0.0)
         paid_unit_price = _parse_float(_cell(row, "Оплачено покупателем"), default=0.0)
         shipment_total = _parse_float(_cell(row, "Сумма отправления"), default=0.0)
         source_total = shipment_total if shipment_total > 0 else source_unit_price * source_quantity
@@ -196,6 +203,14 @@ def _clean_header(value: str | None) -> str:
 
 def _cell(row: dict[str, str], key: str) -> str:
     return str(row.get(key, "") or "").strip()
+
+
+def _cell_any(row: dict[str, str], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = _cell(row, key)
+        if value:
+            return value
+    return ""
 
 
 def _parse_float(value: str, default: float = 0.0) -> float:
