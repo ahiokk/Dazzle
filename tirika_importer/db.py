@@ -5,10 +5,12 @@ import math
 import os
 import shutil
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .app_settings import normalize_markup_band_bounds
 from .models import (
     ImportOptions,
     ImportResult,
@@ -2135,23 +2137,35 @@ MARKUP_BAND_HIGH = "high"      # 100–200%
 MARKUP_BAND_EXTREME = "extreme"  # больше 200%
 
 
+MARKUP_BAND_ORDER = (
+    MARKUP_BAND_LOW,
+    MARKUP_BAND_NORMAL,
+    MARKUP_BAND_GOOD,
+    MARKUP_BAND_HIGH,
+    MARKUP_BAND_EXTREME,
+)
+
+
 def markup_band(
     markup_pct: float | None,
     *,
     min_markup_percent: float = 50.0,
+    bounds: Sequence[float] | None = None,
 ) -> str | None:
-    """Ключ диапазона наценки для подсветки строки накладной."""
+    """Ключ диапазона наценки для подсветки строки накладной.
+
+    `bounds` — три верхние границы (по умолчанию 75/100/200); магазин меняет их
+    в настройках. Нижняя граница первого диапазона — минимальная наценка.
+    """
     if markup_pct is None:
         return None
     value = float(markup_pct)
     if value < float(min_markup_percent) - 0.05:
         return MARKUP_BAND_LOW
-    if value < 75.0:
-        return MARKUP_BAND_NORMAL
-    if value < 100.0:
-        return MARKUP_BAND_GOOD
-    if value < 200.0:
-        return MARKUP_BAND_HIGH
+    edges = normalize_markup_band_bounds(bounds)
+    for edge, band in zip(edges, MARKUP_BAND_ORDER[1:-1]):
+        if value < edge:
+            return band
     return MARKUP_BAND_EXTREME
 
 

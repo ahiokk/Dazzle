@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from datetime import datetime
 import os
 from pathlib import Path
@@ -8,7 +9,15 @@ import re
 import sys
 import traceback
 
-from .app_settings import AppSettings, load_app_settings, save_app_settings
+from .app_settings import (
+    DEFAULT_MARKUP_BAND_BOUNDS,
+    DEFAULT_MARKUP_BAND_COLORS,
+    AppSettings,
+    load_app_settings,
+    normalize_markup_band_bounds,
+    normalize_markup_band_colors,
+    save_app_settings,
+)
 from .config import load_config
 from .db import (
     MARKUP_BAND_EXTREME,
@@ -16,6 +25,7 @@ from .db import (
     MARKUP_BAND_HIGH,
     MARKUP_BAND_LOW,
     MARKUP_BAND_NORMAL,
+    MARKUP_BAND_ORDER,
     ImportValidationError,
     TirikaDB,
     TirikaDBError,
@@ -41,6 +51,7 @@ from .qt_compat import (
     QByteArray,
     QCheckBox,
     QColor,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -621,6 +632,214 @@ class ImportResultDialog(QDialog):
 
 
 
+class MarkupBandsEditor(QWidget):
+    """Настройка цветных полос наценки: где проходят границы и каким цветом.
+
+    Слева — образец с числом из середины диапазона: продавец сразу видит, как
+    полоса будет выглядеть в накладной, а не гадает по названию цвета.
+    Нижняя граница первой полосы — минимальная наценка, она задаётся выше,
+    поэтому здесь только показывается.
+    """
+
+    changed = Signal()
+
+    _ROW_HINTS = {
+        MARKUP_BAND_LOW: "Так продавать нельзя — цена ниже минимальной наценки.",
+        MARKUP_BAND_NORMAL: "Наценка небольшая, но допустимая.",
+        MARKUP_BAND_GOOD: "Обычная рабочая наценка.",
+        MARKUP_BAND_HIGH: "Наценка высокая — стоит взглянуть на цену.",
+        MARKUP_BAND_EXTREME: "Наценка неправдоподобная: скорее всего ошибка в цене.",
+    }
+
+    def __init__(
+        self,
+        bounds: Sequence[float],
+        colors: Sequence[str],
+        min_markup_percent: float,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._colors = normalize_markup_band_colors(colors)
+        self._min_markup_percent = float(min_markup_percent)
+        edges = normalize_markup_band_bounds(bounds)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        # Всё прижимаем влево: образец — название — диапазон — граница читаются
+        # одной строкой, а свободное место уходит вправо.
+        grid.setColumnMinimumWidth(1, 148)
+        grid.setColumnMinimumWidth(2, 78)
+        grid.setColumnStretch(4, 1)
+
+        self._swatches: dict[str, QPushButton] = {}
+        self._range_labels: dict[str, QLabel] = {}
+        self._spins: list[QDoubleSpinBox] = []
+
+        for row, band in enumerate(MARKUP_BAND_ORDER):
+            swatch = QPushButton(self)
+            swatch.setObjectName("markupSwatch")
+            swatch.setFixedSize(76, 30)
+            swatch.setCursor(Qt.PointingHandCursor)
+            swatch.setToolTip("Нажмите, чтобы выбрать цвет полосы.")
+            swatch.clicked.connect(lambda _=False, b=band: self._pick_color(b))
+            grid.addWidget(swatch, row, 0)
+            self._swatches[band] = swatch
+
+            title = QLabel(MARKUP_BAND_TITLES[band], self)
+            title.setToolTip(self._ROW_HINTS[band])
+            grid.addWidget(title, row, 1)
+
+            range_label = QLabel(self)
+            range_label.setObjectName("subtitleLabel")
+            range_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            grid.addWidget(range_label, row, 2)
+            self._range_labels[band] = range_label
+
+            # Верхняя граница есть только у трёх средних полос: у первой снизу
+            # стоит минимальная наценка, у последней верха нет вовсе.
+            if 0 < row < len(MARKUP_BAND_ORDER) - 1:
+                spin = QDoubleSpinBox(self)
+                spin.setRange(0.0, 100000.0)
+                spin.setDecimals(0)
+                spin.setSingleStep(5.0)
+                spin.setSuffix(" %")
+                spin.setFixedWidth(104)
+                spin.setValue(edges[row - 1])
+                spin.setToolTip("Верхняя граница этой полосы.")
+                spin.valueChanged.connect(self._on_bound_changed)
+                grid.addWidget(spin, row, 3)
+                self._spins.append(spin)
+            else:
+                grid.addWidget(QLabel("", self), row, 3)
+
+        root.addLayout(grid)
+
+        separator = QFrame(self)
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Plain)
+        separator.setStyleSheet("color:#DCE3EE;")
+        root.addWidget(separator)
+
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(10)
+        preview_caption = QLabel("Легенда под таблицей:", self)
+        preview_caption.setObjectName("subtitleLabel")
+        preview_row.addWidget(preview_caption, 0, Qt.AlignVCenter)
+        self._preview = QLabel(self)
+        self._preview.setTextFormat(Qt.RichText)
+        self._preview.setWordWrap(True)
+        preview_row.addWidget(self._preview, 1, Qt.AlignVCenter)
+        root.addLayout(preview_row)
+
+        reset_btn = QPushButton("Вернуть стандартные цвета и границы", self)
+        reset_btn.setFixedHeight(30)
+        reset_btn.setToolTip(
+            "Возвращает то, о чём договорились изначально: 75 / 100 / 200 % "
+            "и красный — оранжевый — зелёный — жёлтый — красный."
+        )
+        reset_btn.clicked.connect(self._reset_defaults)
+        root.addWidget(reset_btn, 0, Qt.AlignLeft)
+
+        self._sync_spin_limits()
+        self._refresh()
+
+    # --- данные ---------------------------------------------------------
+
+    def bounds(self) -> list[float]:
+        return normalize_markup_band_bounds([spin.value() for spin in self._spins])
+
+    def colors(self) -> list[str]:
+        return list(self._colors)
+
+    def set_min_markup_percent(self, value: float) -> None:
+        """Минимальная наценка живёт в соседнем поле — первая полоса идёт от неё."""
+        self._min_markup_percent = float(value)
+        self._sync_spin_limits()
+        self._refresh()
+
+    # --- поведение ------------------------------------------------------
+
+    def _pick_color(self, band: str) -> None:
+        index = MARKUP_BAND_ORDER.index(band)
+        current = QColor(self._colors[index])
+        chosen = QColorDialog.getColor(
+            current, self, f"Цвет полосы «{MARKUP_BAND_TITLES[band]}»"
+        )
+        if not chosen.isValid():
+            return
+        self._colors[index] = chosen.name()
+        self._refresh()
+        self.changed.emit()
+
+    def _on_bound_changed(self) -> None:
+        self._sync_spin_limits()
+        self._refresh()
+        self.changed.emit()
+
+    def _sync_spin_limits(self) -> None:
+        """Границы держим по возрастанию — иначе полоса схлопнется в ничто."""
+        lower = self._min_markup_percent
+        for spin in self._spins:
+            spin.blockSignals(True)
+            spin.setMinimum(lower + 1.0)
+            spin.blockSignals(False)
+            lower = spin.value()
+
+    def _reset_defaults(self) -> None:
+        self._colors = list(DEFAULT_MARKUP_BAND_COLORS)
+        for spin, value in zip(self._spins, DEFAULT_MARKUP_BAND_BOUNDS):
+            spin.blockSignals(True)
+            spin.setMinimum(0.0)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
+        self._sync_spin_limits()
+        self._refresh()
+        self.changed.emit()
+
+    def _refresh(self) -> None:
+        palette = markup_band_palette(self._colors)
+        captions = dict(_markup_legend_bands(self._min_markup_percent, self.bounds()))
+        samples = self._sample_values()
+        for band in MARKUP_BAND_ORDER:
+            background, foreground = palette[band]
+            swatch = self._swatches[band]
+            swatch.setText(samples[band])
+            # Высоту задаём и в стиле: общая тема ставит QPushButton свой
+            # min-height, и без этого образец вытягивается вдвое.
+            swatch.setStyleSheet(
+                f"QPushButton#markupSwatch{{background:{background};color:{foreground};"
+                "border:1px solid rgba(0,0,0,0.18);border-radius:6px;font-weight:700;"
+                "min-height:30px;max-height:30px;padding:0;font-size:9.5pt;}"
+                f"QPushButton#markupSwatch:hover{{border:1px solid {foreground};}}"
+            )
+            caption = captions[band].replace("&lt;", "до ").replace("&gt;", "от ")
+            self._range_labels[band].setText(caption)
+        self._preview.setText(
+            _markup_legend_html(self._min_markup_percent, self.bounds(), self._colors)
+        )
+
+    def _sample_values(self) -> dict[str, str]:
+        """Число из середины полосы — чтобы образец выглядел как живая ячейка."""
+        edges = self.bounds()
+        low = self._min_markup_percent
+        points = [
+            max(0.0, low - 15.0),
+            (low + edges[0]) / 2.0,
+            (edges[0] + edges[1]) / 2.0,
+            (edges[1] + edges[2]) / 2.0,
+            edges[2] + 60.0,
+        ]
+        return {
+            band: _fmt_number(value, 1)
+            for band, value in zip(MARKUP_BAND_ORDER, points)
+        }
+
+
 class SettingsDialog(QDialog):
     check_updates_requested = Signal(str)
 
@@ -637,6 +856,7 @@ class SettingsDialog(QDialog):
         self._article_match_field_default = current.article_match_field
         self._table_header_state = current.table_header_state
         self._ignored_update_version = current.ignored_update_version
+        self._last_update_check = current.last_update_check
         self._mikado_password_enc = current.mikado_password_enc
         self._mikado_base_url = current.mikado_base_url
         # Поля, которых нет в диалоге, но которые нельзя терять при сохранении.
@@ -809,18 +1029,32 @@ class SettingsDialog(QDialog):
         self.enforce_min_markup_cb.toggled.connect(self.min_markup_spin.setEnabled)
         self.min_markup_spin.setEnabled(current.enforce_min_markup)
 
-        price_layout.addWidget(QLabel("Цвета колонки «Наценка»:"), 5, 0)
-        self.markup_bands_label = QLabel(self)
-        self.markup_bands_label.setTextFormat(Qt.RichText)
-        self.markup_bands_label.setWordWrap(True)
-        self.markup_bands_label.setToolTip(
-            "Так подсвечивается наценка в накладной: сразу видно, где цена ушла "
-            "ниже минимума и где наценка неправдоподобно большая."
-        )
-        price_layout.addWidget(self.markup_bands_label, 5, 1)
-        self.min_markup_spin.valueChanged.connect(self._refresh_markup_bands_label)
-        self._refresh_markup_bands_label()
         general_layout.addWidget(price_group)
+
+        bands_group = QGroupBox("Цвета колонки «Наценка»", self)
+        bands_layout = QVBoxLayout(bands_group)
+        bands_layout.setSpacing(10)
+        bands_hint = QLabel(
+            "Так подсвечивается наценка в накладной: сразу видно, где цена ушла "
+            "ниже минимума и где наценка неправдоподобно большая. Границы и цвета "
+            "полос настраиваются под магазин.",
+            self,
+        )
+        bands_hint.setObjectName("subtitleLabel")
+        bands_hint.setWordWrap(True)
+        bands_layout.addWidget(bands_hint)
+
+        self.markup_bands_editor = MarkupBandsEditor(
+            current.markup_band_bounds,
+            current.markup_band_colors,
+            current.min_markup_percent,
+            self,
+        )
+        bands_layout.addWidget(self.markup_bands_editor)
+        self.min_markup_spin.valueChanged.connect(
+            self.markup_bands_editor.set_min_markup_percent
+        )
+        general_layout.addWidget(bands_group)
 
         mikado_group = QGroupBox("Микадо — заказ Zekkert", self)
         mk = QGridLayout(mikado_group)
@@ -1049,6 +1283,15 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.Save | QDialogButtonBox.Cancel,
             parent=self,
         )
+        # Без явных подписей Qt рисует английские Save/Cancel: русского перевода
+        # в сборке нет, а остальные диалоги программы подписаны по-русски.
+        save_btn = buttons.button(QDialogButtonBox.Save)
+        if save_btn is not None:
+            save_btn.setText("Сохранить")
+            save_btn.setObjectName("primaryBtn")
+        cancel_btn = buttons.button(QDialogButtonBox.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setText("Отмена")
         root.addWidget(buttons)
 
         self.db_pick_btn.clicked.connect(self._pick_db_file)
@@ -1090,13 +1333,6 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Автозапуск", f"Не удалось изменить автозапуск: {exc}")
 
-    def _refresh_markup_bands_label(self) -> None:
-        label = getattr(self, "markup_bands_label", None)
-        if label is None:
-            return
-        min_pct = float(self.min_markup_spin.value())
-        label.setText(_markup_legend_html(min_pct))
-
     def values(self) -> AppSettings:
         return AppSettings(
             db_path=self.db_path_edit.text().strip(),
@@ -1105,6 +1341,8 @@ class SettingsDialog(QDialog):
             round_step=float(self.round_step_spin.value()),
             min_markup_percent=float(self.min_markup_spin.value()),
             enforce_min_markup=self.enforce_min_markup_cb.isChecked(),
+            markup_band_bounds=self.markup_bands_editor.bounds(),
+            markup_band_colors=self.markup_bands_editor.colors(),
             supplier_id=self._supplier_id,
             user_id=self._selected_data(self.user_combo, 1),
             shop_id=self._selected_data(self.shop_combo, 0),
@@ -1128,6 +1366,7 @@ class SettingsDialog(QDialog):
             update_manifest_url=self._update_manifest_url,
             auto_check_updates=self.auto_update_check_cb.isChecked(),
             ignored_update_version=self._ignored_update_version,
+            last_update_check=self._last_update_check,
             mikado_client_code=self.mikado_code_edit.text().strip(),
             mikado_password_enc=(
                 secret_store.encrypt(self.mikado_pass_edit.text())
@@ -2135,8 +2374,12 @@ class MainWindow(QMainWindow):
         if label is None:
             return
         min_pct = float(self.app_settings.min_markup_percent)
-        label.setText("Наценка: " + _markup_legend_html(min_pct))
-        label.setToolTip(_markup_legend_text(min_pct))
+        bounds = self.app_settings.markup_band_bounds
+        label.setText(
+            "Наценка: "
+            + _markup_legend_html(min_pct, bounds, self.app_settings.markup_band_colors)
+        )
+        label.setToolTip(_markup_legend_text(min_pct, bounds))
 
     @staticmethod
     def _set_combo_by_data(combo: QComboBox, target: int) -> None:
@@ -2986,6 +3229,8 @@ class MainWindow(QMainWindow):
             sorting_was_enabled = self.table.isSortingEnabled()
             self.table.setSortingEnabled(False)
             self.table.setRowCount(len(lines))
+            # Палитру считаем один раз на всю таблицу, а не на каждую строку.
+            markup_palette = markup_band_palette(self.app_settings.markup_band_colors)
             for row, line in enumerate(lines):
                 self._refresh_line_price_state(line)
                 sell_price = line.sell_price if line.sell_price is not None else line.price
@@ -3113,8 +3358,9 @@ class MainWindow(QMainWindow):
                     band = markup_band(
                         markup_pct,
                         min_markup_percent=self.app_settings.min_markup_percent,
+                        bounds=self.app_settings.markup_band_bounds,
                     )
-                    band_colors = MARKUP_BAND_COLORS.get(band or "")
+                    band_colors = markup_palette.get(band or "")
                     if band_colors is not None:
                         background, foreground = band_colors
                         markup_item.setBackground(QColor(background))
@@ -3987,40 +4233,82 @@ TOOLTIP_TEXT_COLUMNS = (
 # пропускаемая строка читалась одной линией и не терялась среди остальных.
 SKIP_ROW_COLOR = "#FBE4E4"
 
-# Подсветка колонки «Наценка»: цвет фона и цвет текста для каждого диапазона.
-MARKUP_BAND_COLORS: dict[str, tuple[str, str]] = {
-    MARKUP_BAND_LOW: ("#FFCDD2", "#8C0000"),      # ниже минимума — красный
-    MARKUP_BAND_NORMAL: ("#FFE0B2", "#7A3E00"),   # 50–75% — оранжевый
-    MARKUP_BAND_GOOD: ("#C8E6C9", "#1B5E20"),     # 75–100% — зелёный
-    MARKUP_BAND_HIGH: ("#FFF59D", "#5E5000"),     # 100–200% — жёлтый
-    MARKUP_BAND_EXTREME: ("#FFCDD2", "#8C0000"),  # выше 200% — красный
+# Названия полос наценки. Границы и цвета магазин задаёт в настройках, а вот
+# смысл полос неизменен: слева — продавать нельзя, справа — цена неправдоподобна.
+MARKUP_BAND_TITLES: dict[str, str] = {
+    MARKUP_BAND_LOW: "Ниже минимума",
+    MARKUP_BAND_NORMAL: "Небольшая",
+    MARKUP_BAND_GOOD: "Хорошая",
+    MARKUP_BAND_HIGH: "Высокая",
+    MARKUP_BAND_EXTREME: "Подозрительная",
 }
 
 
-def _markup_legend_text(min_markup_percent: float) -> str:
-    min_text = _fmt_number(float(min_markup_percent), 1)
-    return (
-        f"Наценка: ниже {min_text}% — красный, "
-        f"{min_text}–75% — оранжевый, 75–100% — зелёный, "
-        "100–200% — жёлтый, выше 200% — красный."
-    )
+def markup_band_palette(colors: Sequence[str] | None = None) -> dict[str, tuple[str, str]]:
+    """Фон и цвет цифр для каждой полосы наценки.
+
+    Магазин выбирает только фон — цвет цифр подбираем сами, чтобы число
+    читалось на любом выбранном цвете.
+    """
+    values = normalize_markup_band_colors(colors)
+    return {
+        band: (background, _band_text_color(background))
+        for band, background in zip(MARKUP_BAND_ORDER, values)
+    }
 
 
-def _markup_legend_bands(min_markup_percent: float) -> tuple[tuple[str, str], ...]:
+def _band_text_color(background: str) -> str:
+    """Тёмный оттенок того же цвета: цифры видно и они не спорят с фоном."""
+    color = QColor(background)
+    if not color.isValid():
+        return "#2B2B2B"
+    hue, saturation, lightness, _alpha = color.getHslF()
+    if lightness < 0.45:
+        return "#FFFFFF"          # тёмный фон — пишем светлым
+    if saturation < 0.12:
+        return "#2B2B2B"          # серый фон — оттенок брать неоткуда
+    text = QColor()
+    text.setHslF(max(hue, 0.0), min(1.0, saturation + 0.25), 0.26)
+    return text.name()
+
+
+def _markup_legend_text(
+    min_markup_percent: float,
+    bounds: Sequence[float] | None = None,
+) -> str:
+    """Расшифровка легенды словами. Про цвета не пишем — их магазин меняет."""
+    parts = [
+        f"{caption.replace('&lt;', 'ниже ').replace('&gt;', 'выше ')} — "
+        f"{MARKUP_BAND_TITLES[band].lower()}"
+        for band, caption in _markup_legend_bands(min_markup_percent, bounds)
+    ]
+    return "Наценка: " + ", ".join(parts) + "."
+
+
+def _markup_legend_bands(
+    min_markup_percent: float,
+    bounds: Sequence[float] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    edges = [_fmt_number(value, 0) for value in normalize_markup_band_bounds(bounds)]
     min_text = _fmt_number(float(min_markup_percent), 0)
     return (
         (MARKUP_BAND_LOW, f"&lt;{min_text}%"),
-        (MARKUP_BAND_NORMAL, f"{min_text}–75%"),
-        (MARKUP_BAND_GOOD, "75–100%"),
-        (MARKUP_BAND_HIGH, "100–200%"),
-        (MARKUP_BAND_EXTREME, "&gt;200%"),
+        (MARKUP_BAND_NORMAL, f"{min_text}–{edges[0]}%"),
+        (MARKUP_BAND_GOOD, f"{edges[0]}–{edges[1]}%"),
+        (MARKUP_BAND_HIGH, f"{edges[1]}–{edges[2]}%"),
+        (MARKUP_BAND_EXTREME, f"&gt;{edges[2]}%"),
     )
 
 
-def _markup_legend_html(min_markup_percent: float) -> str:
+def _markup_legend_html(
+    min_markup_percent: float,
+    bounds: Sequence[float] | None = None,
+    colors: Sequence[str] | None = None,
+) -> str:
+    palette = markup_band_palette(colors)
     chips: list[str] = []
-    for band, caption in _markup_legend_bands(min_markup_percent):
-        background, foreground = MARKUP_BAND_COLORS[band]
+    for band, caption in _markup_legend_bands(min_markup_percent, bounds):
+        background, foreground = palette[band]
         chips.append(
             f'<span style="background:{background};color:{foreground};">'
             f"&nbsp;{caption}&nbsp;</span>"

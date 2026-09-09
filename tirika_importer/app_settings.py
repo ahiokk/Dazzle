@@ -47,6 +47,19 @@ def default_article_match_field() -> str:
     return current_edition().default_article_match_field
 
 
+# Верхние границы цветных диапазонов наценки и цвета полос — от «ниже минимума»
+# до «подозрительно высокой». Значения по умолчанию — те, о которых магазин
+# договорился в 1.0.28; в настройках их можно поменять под себя.
+DEFAULT_MARKUP_BAND_BOUNDS: tuple[float, float, float] = (75.0, 100.0, 200.0)
+DEFAULT_MARKUP_BAND_COLORS: tuple[str, str, str, str, str] = (
+    "#FFCDD2",  # ниже минимума — красный
+    "#FFE0B2",  # небольшая — оранжевый
+    "#C8E6C9",  # хорошая — зелёный
+    "#FFF59D",  # высокая — жёлтый
+    "#FFCDD2",  # подозрительная — красный
+)
+
+
 @dataclass
 class AppSettings:
     db_path: str = ""
@@ -58,6 +71,15 @@ class AppSettings:
     # «Предупреждение».
     min_markup_percent: float = 50.0
     enforce_min_markup: bool = True
+    # Цветные диапазоны наценки. Нижняя граница первого диапазона — это
+    # min_markup_percent, дальше идут три настраиваемые верхние границы.
+    # Цвета — фон полосы; цвет цифр Dazzle подбирает сам, затемняя фон.
+    markup_band_bounds: list[float] = field(
+        default_factory=lambda: list(DEFAULT_MARKUP_BAND_BOUNDS)
+    )
+    markup_band_colors: list[str] = field(
+        default_factory=lambda: list(DEFAULT_MARKUP_BAND_COLORS)
+    )
     supplier_id: int = 1
     user_id: int = 1
     shop_id: int = 0
@@ -146,6 +168,8 @@ def load_app_settings() -> AppSettings:
         enforce_min_markup=_to_bool(
             raw.get("enforce_min_markup"), defaults.enforce_min_markup
         ),
+        markup_band_bounds=normalize_markup_band_bounds(raw.get("markup_band_bounds")),
+        markup_band_colors=normalize_markup_band_colors(raw.get("markup_band_colors")),
         supplier_id=_to_int(raw.get("supplier_id"), defaults.supplier_id),
         user_id=_to_int(raw.get("user_id"), defaults.user_id),
         shop_id=_to_int(raw.get("shop_id"), defaults.shop_id),
@@ -202,6 +226,7 @@ def load_app_settings() -> AppSettings:
         ),
         auto_check_updates=_to_bool(raw.get("auto_check_updates"), defaults.auto_check_updates),
         ignored_update_version=str(raw.get("ignored_update_version", defaults.ignored_update_version) or ""),
+        last_update_check=str(raw.get("last_update_check", defaults.last_update_check) or ""),
         order_customer_name=str(raw.get("order_customer_name", defaults.order_customer_name) or ""),
         orders_notify_on_startup=_to_bool(
             raw.get("orders_notify_on_startup"), defaults.orders_notify_on_startup
@@ -225,6 +250,47 @@ def save_app_settings(settings: AppSettings) -> Path:
     payload = asdict(settings)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def normalize_markup_band_bounds(value: object) -> list[float]:
+    """Три верхние границы диапазонов по возрастанию.
+
+    Настройки правит человек (и руками в json тоже), поэтому чиним молча:
+    берём что есть, добиваем значениями по умолчанию, сортируем и разводим
+    совпавшие границы — иначе диапазон схлопнется и полоса просто исчезнет.
+    """
+    numbers: list[float] = []
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            try:
+                numbers.append(float(item))
+            except (TypeError, ValueError):
+                continue
+    numbers = [n for n in numbers if 0.0 < n <= 100000.0]
+    while len(numbers) < len(DEFAULT_MARKUP_BAND_BOUNDS):
+        numbers.append(float(DEFAULT_MARKUP_BAND_BOUNDS[len(numbers)]))
+    numbers = sorted(numbers[: len(DEFAULT_MARKUP_BAND_BOUNDS)])
+    for i in range(1, len(numbers)):
+        if numbers[i] <= numbers[i - 1]:
+            numbers[i] = numbers[i - 1] + 1.0
+    return numbers
+
+
+def normalize_markup_band_colors(value: object) -> list[str]:
+    """Пять цветов полос в формате #RRGGBB; неопознанное заменяем стандартным."""
+    colors: list[str] = []
+    raw_items = list(value) if isinstance(value, (list, tuple)) else []
+    for index, default in enumerate(DEFAULT_MARKUP_BAND_COLORS):
+        candidate = str(raw_items[index]).strip() if index < len(raw_items) else ""
+        colors.append(candidate if _is_hex_color(candidate) else default)
+    return colors
+
+
+def _is_hex_color(value: str) -> bool:
+    text = value.strip()
+    if len(text) != 7 or not text.startswith("#"):
+        return False
+    return all(ch in "0123456789abcdefABCDEF" for ch in text[1:])
 
 
 def _to_float(value: object, default: float) -> float:
