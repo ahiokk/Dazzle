@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 APP_NAME = "Dazzle"
-APP_VERSION = "1.0.28"
+APP_VERSION = "1.0.29"
 
 # Редакции (издания) программы. Раньше сборки назывались по версии Windows
 # (win10/win7), но на деле каждая сборка — это конкретный магазин со своим
