@@ -3929,6 +3929,15 @@ class MainWindow(QMainWindow):
                         warning_item.setBackground(QColor("#FFF3CD"))
                         warning_item.setForeground(QColor("#7A3E00"))
 
+                # Пропускаемую строку красим последней, поверх всех подсветок,
+                # чтобы вся линия читалась целиком.
+                if line.action == "skip":
+                    skip_color = QColor(SKIP_ROW_COLOR)
+                    for col in range(self.table.columnCount()):
+                        item = self.table.item(row, col)
+                        if item is not None:
+                            item.setBackground(skip_color)
+
                 combo = QComboBox(self.table)
                 combo.addItem("import")
                 combo.addItem("create")
@@ -4142,7 +4151,17 @@ class MainWindow(QMainWindow):
             line.action = action
             if changed:
                 self._record_history_state()
+                # Подсветка строки зависит от действия, поэтому перерисовываем
+                # таблицу. Делаем это следующим тактом event loop: сейчас мы
+                # внутри сигнала самого QComboBox, а _populate_table его удалит.
+                QTimer.singleShot(0, self._repopulate_after_action_change)
             self._apply_table_filter()
+
+    def _repopulate_after_action_change(self) -> None:
+        if self.current_invoice is None:
+            return
+        self._populate_table(self.current_invoice.lines)
+        self._apply_table_filter()
 
     def _selected_rows(self) -> list[int]:
         if self.current_invoice is None:
@@ -4733,6 +4752,10 @@ TOOLTIP_TEXT_COLUMNS = (
     COL_SIMILAR,
     COL_WARNING,
 )
+
+# Строка с действием skip красится целиком бледно-красным: магазин просил, чтобы
+# пропускаемая строка читалась одной линией и не терялась среди остальных.
+SKIP_ROW_COLOR = "#FBE4E4"
 
 # Подсветка колонки «Наценка»: цвет фона и цвет текста для каждого диапазона.
 MARKUP_BAND_COLORS: dict[str, tuple[str, str]] = {
