@@ -1,6 +1,6 @@
 {
-  "version": "1.0.28",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.28/Dazzle-Lastochka-Win7-Setup-1.0.28.exe",
-  "sha256": "9d31f6874e6b3d7b472af8f0f0d53f6a9b06a00612e6e1134cfb251f51324881",
-  "notes": "Минимальная наценка 50% с автоподъёмом цены, цветные диапазоны наценки, подсказки по строке. Сборка Lastochka для Windows 7."
+  "version": "1.0.29",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.29/Dazzle-Lastochka-Win7-Setup-1.0.29.exe",
+  "sha256": "b67988ebace291f97e4d5a2b339fefea7885d0b7ee4e1ac6c2be4a2e4ac410f5",
+  "notes": "Цвета и границы полос наценки настраиваются. Пропущенные строки видно целиком. Артикул нового товара попадает в кроссы. Ошибки проще прислать: детали копируются одной кнопкой, в настройках есть папка с логом и дата последней проверки обновлений. Сборка Lastochka для Windows 7."
 }

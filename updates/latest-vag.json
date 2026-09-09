@@ -1,6 +1,6 @@
 {
-  "version": "1.0.28",
-  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.28/Dazzle-VAG-Win10-Setup-1.0.28.exe",
-  "sha256": "842057ebc6bcf6e88d4ba3ca19ac98cf7479bcdec517a08534dfbea7fdf554df",
-  "notes": "Первая сборка редакции VAG: без вкладки Ozon, минимальная наценка 50%, цветные диапазоны наценки."
+  "version": "1.0.29",
+  "url": "https://github.com/ahiokk/Dazzle/releases/download/v1.0.29/Dazzle-VAG-Win10-Setup-1.0.29.exe",
+  "sha256": "f89d177bb2b4a6d0678a3514dcf50255a8919ac52b2ebfbcf43ba9ef4782f4a6",
+  "notes": "Цвета и границы полос наценки настраиваются. Пропущенные строки видно целиком. Артикул нового товара попадает в кроссы. Ошибки проще прислать: детали копируются одной кнопкой, в настройках есть папка с логом и дата последней проверки обновлений. Сборка VAG."
 }
